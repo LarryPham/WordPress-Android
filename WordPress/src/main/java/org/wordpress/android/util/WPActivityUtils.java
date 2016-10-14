@@ -1,33 +1,126 @@
 package org.wordpress.android.util;
 
-import android.app.Activity;
+import android.app.Dialog;
+import android.app.Fragment;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Point;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.os.Build;
+import android.preference.PreferenceManager;
 import android.support.v7.app.ActionBar;
-import android.support.v7.app.ActionBarActivity;
-import android.util.TypedValue;
+import android.support.v7.app.AppCompatActivity;
+import android.support.v7.widget.Toolbar;
+import android.text.TextUtils;
+import android.view.LayoutInflater;
 import android.view.View;
-import android.widget.FrameLayout;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
-import org.wordpress.android.WordPress;
-import org.wordpress.android.ui.ActivityId;
-import org.wordpress.android.ui.ViewSiteActivity;
-import org.wordpress.android.ui.comments.CommentsActivity;
-import org.wordpress.android.ui.media.MediaBrowserActivity;
-import org.wordpress.android.ui.notifications.NotificationsActivity;
-import org.wordpress.android.ui.posts.PagesActivity;
-import org.wordpress.android.ui.posts.PostsActivity;
-import org.wordpress.android.ui.reader.ReaderPostListActivity;
-import org.wordpress.android.ui.stats.StatsActivity;
-import org.wordpress.android.ui.themes.ThemeBrowserActivity;
+import org.wordpress.android.R;
+import org.wordpress.android.ui.prefs.AppSettingsFragment;
+
+import java.util.List;
+import java.util.Locale;
 
 public class WPActivityUtils {
+    // Hack! PreferenceScreens don't show the toolbar, so we'll manually add one
+    // See: http://stackoverflow.com/a/27455363/309558
+    public static void addToolbarToDialog(final Fragment context, final Dialog dialog, String title) {
+        if (!context.isAdded() || dialog == null) {
+            return;
+        }
+
+        Toolbar toolbar;
+        if (dialog.findViewById(android.R.id.list) == null) {
+            return;
+        }
+
+        ViewGroup root = (ViewGroup) dialog.findViewById(android.R.id.list).getParent();
+        toolbar = (Toolbar) LayoutInflater.from(context.getActivity())
+                .inflate(org.wordpress.android.R.layout.toolbar, root, false);
+        root.addView(toolbar, 0);
+
+        dialog.getWindow().setWindowAnimations(R.style.DialogAnimations);
+
+        TextView titleView = (TextView) toolbar.findViewById(R.id.toolbar_title);
+        titleView.setVisibility(View.VISIBLE);
+        titleView.setText(title);
+
+        toolbar.setTitle("");
+        toolbar.setNavigationIcon(org.wordpress.android.R.drawable.ic_arrow_back_white_24dp);
+        toolbar.setNavigationOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dialog.dismiss();
+            }
+        });
+    }
+
+    /**
+     * Checks for a {@link Toolbar} at the first child element of a given {@link Dialog} and
+     * removes it if it exists.
+     *
+     * Originally added to prevent a crash that occurs with nested PreferenceScreens that added
+     * a toolbar via {@link WPActivityUtils#addToolbarToDialog(Fragment, Dialog, String)}. The
+     * crash can be reproduced by turning 'Don't keep activities' on from Developer options.
+     */
+    public static void removeToolbarFromDialog(final Fragment context, final Dialog dialog) {
+        if (dialog == null || !context.isAdded()) return;
+
+        ViewGroup root = (ViewGroup) dialog.findViewById(android.R.id.list).getParent();
+        if (root.getChildAt(0) instanceof Toolbar) {
+            root.removeViewAt(0);
+        }
+    }
+
+    public static void setStatusBarColor(Window window, int color) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            //noinspection deprecation
+            window.setStatusBarColor(window.getContext().getResources().getColor(color));
+        }
+    }
+
+    public static void hideKeyboard(final View view) {
+        InputMethodManager inputMethodManager = (InputMethodManager) view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+        inputMethodManager.hideSoftInputFromWindow(view.getWindowToken(), 0);
+    }
+
+    public static void applyLocale(Context context) {
+        SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
+
+        if (sharedPreferences.contains(AppSettingsFragment.LANGUAGE_PREF_KEY)) {
+            Locale contextLocale = context.getResources().getConfiguration().locale;
+            String contextLanguage = contextLocale.getLanguage();
+            contextLanguage = LanguageUtils.patchDeviceLanguageCode(contextLanguage);
+            String contextCountry = contextLocale.getCountry();
+            String locale = sharedPreferences.getString(AppSettingsFragment.LANGUAGE_PREF_KEY, "");
+
+            if (!TextUtils.isEmpty(contextCountry)) {
+                contextLanguage += "-" + contextCountry;
+            }
+
+            if (!locale.equals(contextLanguage)) {
+                Resources resources = context.getResources();
+                Configuration conf = resources.getConfiguration();
+                conf.locale = new Locale(locale);
+                resources.updateConfiguration(conf, resources.getDisplayMetrics());
+            }
+        }
+    }
 
     public static Context getThemedContext(Context context) {
-        if (context instanceof ActionBarActivity) {
-            ActionBar actionBar = ((ActionBarActivity)context).getSupportActionBar();
+        if (context instanceof AppCompatActivity) {
+            ActionBar actionBar = ((AppCompatActivity)context).getSupportActionBar();
             if (actionBar != null) {
                 return actionBar.getThemedContext();
             }
@@ -35,71 +128,16 @@ public class WPActivityUtils {
         return context;
     }
 
-    public static Intent getIntentForActivityId(Context context, ActivityId id) {
-        final Intent intent;
-        switch (id) {
-            case COMMENTS:
-                if (WordPress.getCurrentBlog() == null) {
-                    return null;
-                }
-                intent = new Intent(context, CommentsActivity.class);
-                intent.putExtra("id", WordPress.getCurrentBlog().getLocalTableBlogId());
-                break;
-            case MEDIA:
-                intent = new Intent(context, MediaBrowserActivity.class);
-                break;
-            case NOTIFICATIONS:
-                intent = new Intent(context, NotificationsActivity.class);
-                break;
-            case PAGES:
-                if (WordPress.getCurrentBlog() == null) {
-                    return null;
-                }
-                intent = new Intent(context, PagesActivity.class);
-                intent.putExtra("id", WordPress.getCurrentBlog().getLocalTableBlogId());
-                intent.putExtra(PostsActivity.EXTRA_VIEW_PAGES, true);
-                break;
-            case POSTS:
-                intent = new Intent(context, PostsActivity.class);
-                break;
-            case READER:
-                intent = new Intent(context, ReaderPostListActivity.class);
-                break;
-            case STATS:
-                if (WordPress.getCurrentBlog() == null) {
-                    return null;
-                }
-                intent = new Intent(context, StatsActivity.class);
-                intent.putExtra(StatsActivity.ARG_LOCAL_TABLE_BLOG_ID, WordPress.getCurrentBlog().getLocalTableBlogId());
-                break;
-            case THEMES:
-                intent = new Intent(context, ThemeBrowserActivity.class);
-                break;
-            case VIEW_SITE:
-                intent = new Intent(context, ViewSiteActivity.class);
-                break;
-            default:
-                intent = null;
-                break;
+    public static boolean isEmailClientAvailable(Context context) {
+        if (context == null) {
+            return false;
         }
 
-        return intent;
-    }
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_APP_EMAIL);
+        PackageManager packageManager = context.getPackageManager();
+        List<ResolveInfo> emailApps = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
 
-    /*
-     * returns the optimal pixel width to use for the menu drawer based on:
-     * http://www.google.com/design/spec/layout/structure.html#structure-side-nav
-     * http://www.google.com/design/spec/patterns/navigation-drawer.html
-     * http://android-developers.blogspot.co.uk/2014/10/material-design-on-android-checklist.html
-     * https://medium.com/sebs-top-tips/material-navigation-drawer-sizing-558aea1ad266
-     */
-    public static int getOptimalDrawerWidth(Context context) {
-        Point displaySize = DisplayUtils.getDisplayPixelSize(context);
-        int appBarHeight = DisplayUtils.getActionBarHeight(context);
-        int drawerWidth = Math.min(displaySize.x, displaySize.y) - appBarHeight;
-        int maxDp = (DisplayUtils.isXLarge(context) ? 400 : 320);
-        int maxPx = DisplayUtils.dpToPx(context, maxDp);
-        return Math.min(drawerWidth, maxPx);
+        return !emailApps.isEmpty();
     }
-
 }

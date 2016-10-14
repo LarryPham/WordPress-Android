@@ -4,21 +4,27 @@ import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
-import android.preference.PreferenceManager;
 import android.text.TextUtils;
 
-import com.helpshift.Helpshift;
+import com.helpshift.Core;
+import com.helpshift.InstallConfig;
+import com.helpshift.exceptions.InstallException;
+import com.helpshift.support.Support;
+import com.helpshift.support.Support.Delegate;
 
 import org.apache.commons.lang.ArrayUtils;
 import org.wordpress.android.BuildConfig;
 import org.wordpress.android.WordPress;
 import org.wordpress.android.analytics.AnalyticsTracker;
 import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.models.AccountHelper;
+import org.wordpress.android.ui.accounts.BlogUtils;
+import org.wordpress.android.util.AppLog.T;
 
-import java.util.Date;
+import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 public class HelpshiftHelper {
     public static String ORIGIN_KEY = "ORIGIN_KEY";
@@ -46,7 +52,9 @@ public class HelpshiftHelper {
         ORIGIN_UNKNOWN("origin:unknown"),
         ORIGIN_LOGIN_SCREEN_HELP("origin:login-screen-help"),
         ORIGIN_LOGIN_SCREEN_ERROR("origin:login-screen-error"),
-        ORIGIN_SETTINGS_SCREEN_HELP("origin:settings-screen-help");
+        ORIGIN_ME_SCREEN_HELP("origin:me-screen-help"),
+        ORIGIN_START_OVER("origin:start-over"),
+        ORIGIN_DELETE_SITE("origin:delete-site");
 
         private final String mStringValue;
 
@@ -81,10 +89,46 @@ public class HelpshiftHelper {
     }
 
     public static void init(Application application) {
-        HashMap<String, Boolean> config = new HashMap<String, Boolean>();
-        config.put("enableInAppNotification", false);
-        Helpshift.install(application, BuildConfig.HELPSHIFT_API_KEY, BuildConfig.HELPSHIFT_API_DOMAIN,
-                BuildConfig.HELPSHIFT_API_ID, config);
+        InstallConfig installConfig = new InstallConfig.Builder()
+                .setEnableInAppNotification(true)
+                .build();
+        Core.init(Support.getInstance());
+        try {
+            Core.install(application, BuildConfig.HELPSHIFT_API_KEY, BuildConfig.HELPSHIFT_API_DOMAIN,
+                    BuildConfig.HELPSHIFT_API_ID, installConfig);
+        } catch (InstallException e) {
+            AppLog.e(T.UTILS, e);
+        }
+        Support.setDelegate(new Delegate() {
+            @Override
+            public void sessionBegan() {
+            }
+
+            @Override
+            public void sessionEnded() {
+            }
+
+            @Override
+            public void newConversationStarted(String s) {
+            }
+
+            @Override
+            public void userRepliedToConversation(String s) {
+                AnalyticsTracker.track(Stat.SUPPORT_SENT_REPLY_TO_SUPPORT_MESSAGE);
+            }
+
+            @Override
+            public void userCompletedCustomerSatisfactionSurvey(int i, String s) {
+            }
+
+            @Override
+            public void displayAttachmentFile(File file) {
+            }
+
+            @Override
+            public void didReceiveNotification(int i) {
+            }
+        });
     }
 
     /**
@@ -103,7 +147,7 @@ public class HelpshiftHelper {
         // Add tags to Helpshift metadata
         addTags(new Tag[]{origin});
         HashMap config = getHelpshiftConfig(activity);
-        Helpshift.showConversation(activity, config);
+        Support.showConversation(activity, config);
     }
 
     /**
@@ -122,7 +166,7 @@ public class HelpshiftHelper {
         // Add tags to Helpshift metadata
         addTags(new Tag[]{origin});
         HashMap config = getHelpshiftConfig(activity);
-        Helpshift.showFAQs(activity, config);
+        Support.showFAQs(activity, config);
     }
 
     /**
@@ -132,25 +176,38 @@ public class HelpshiftHelper {
      */
     public void registerDeviceToken(Context context, String regId) {
         if (!TextUtils.isEmpty(regId)) {
-            Helpshift.registerDeviceToken(context, regId);
+            Core.registerDeviceToken(context, regId);
         }
     }
 
     public void setTags(Tag[] tags) {
-        mMetadata.put(Helpshift.HSTagsKey, Tag.toString(tags));
+        setTags(Tag.toString(tags));
+    }
+
+    public void setTags(String[] tags) {
+        mMetadata.put(Support.TagsKey, tags);
     }
 
     public void addTags(Tag[] tags) {
-        String[] oldTags = (String[]) mMetadata.get(Helpshift.HSTagsKey);
+        addTags(Tag.toString(tags));
+    }
+
+    public void addTags(String[] tags) {
+        String[] oldTags = (String[]) mMetadata.get(Support.TagsKey);
         // Concatenate arrays
-        mMetadata.put(Helpshift.HSTagsKey, ArrayUtils.addAll(oldTags, Tag.toString(tags)));
+        mMetadata.put(Support.TagsKey, ArrayUtils.addAll(oldTags, tags));
+    }
+
+    public void addPlanTags() {
+        Set<String> planTags = BlogUtils.planTags();
+        addTags(planTags.toArray(new String[planTags.size()]));
     }
 
     /**
      * Handle push notification
      */
     public void handlePush(Context context, Intent intent) {
-        Helpshift.handlePush(context, intent);
+        Core.handlePush(context, intent);
     }
 
     /**
@@ -158,7 +215,7 @@ public class HelpshiftHelper {
      *
      * @param key map key
      * @param object to store. Be careful with the type used. Nothing is specified in the documentation. Better to use
-     *               String but String[] is needed for specific key like Helpshift.HSTagsKey
+     *               String but String[] is needed for specific key like Support.TagsKey
      */
     public void addMetaData(MetadataKey key, Object object) {
         mMetadata.put(key.toString(), object);
@@ -174,16 +231,16 @@ public class HelpshiftHelper {
 
         // List blogs name and url
         int counter = 1;
-        for (Map<String, Object> account : WordPress.wpDB.getAllAccounts()) {
+        String[] extraFields = {"plan_product_id"};
+        for (Map<String, Object> account : WordPress.wpDB.getBlogsBy(null, extraFields)) {
             mMetadata.put("blog-name-" + counter, MapUtils.getMapStr(account, "blogName"));
             mMetadata.put("blog-url-" + counter, MapUtils.getMapStr(account, "url"));
+            mMetadata.put("blog-plan-" + counter, MapUtils.getMapInt(account, "plan_product_id"));
             counter += 1;
         }
 
         // wpcom user
-        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
-        String username = preferences.getString(WordPress.WPCOM_USERNAME_PREFERENCE, null);
-        mMetadata.put("wpcom-username", username);
+        mMetadata.put("wpcom-username", AccountHelper.getDefaultAccount().getUserName());
     }
 
     private HashMap getHelpshiftConfig(Context context) {
@@ -197,10 +254,12 @@ public class HelpshiftHelper {
                 name = splitEmail[0];
             }
         }
-        Helpshift.setNameAndEmail(name, emailAddress);
+        Core.setNameAndEmail(name, emailAddress);
         addDefaultMetaData(context);
+        addPlanTags();
         HashMap config = new HashMap ();
-        config.put(Helpshift.HSCustomMetadataKey, mMetadata);
+        config.put(Support.CustomMetadataKey, mMetadata);
+        config.put("showSearchOnNewConversation", true);
         return config;
     }
 }

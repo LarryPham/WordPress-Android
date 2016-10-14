@@ -18,6 +18,8 @@ public class Post implements Serializable {
 
     public static String QUICK_MEDIA_TYPE_PHOTO = "QuickPhoto";
 
+    private static long FEATURED_IMAGE_INIT_VALUE = -2;
+
     private long localTablePostId;
     private int localTableBlogId;
     private String categories;
@@ -41,10 +43,9 @@ public class Post implements Serializable {
     private String password;
     private String postFormat;
     private String slug;
+
     private boolean localDraft;
-    private boolean uploaded;
-    private boolean mIsUploading;
-    private boolean mChangedFromLocalDraftToPublished;
+    private boolean mChangedFromLocalToPublished;
     private boolean isPage;
     private String pageParentId;
     private String pageParentTitle;
@@ -52,6 +53,9 @@ public class Post implements Serializable {
     private String mediaPaths;
     private String quickPostType;
     private PostLocation mPostLocation;
+
+    private long lastKnownRemoteFeaturedImageId;
+    private long featuredImageId = FEATURED_IMAGE_INIT_VALUE;
 
     public Post() {
     }
@@ -368,22 +372,6 @@ public class Post implements Serializable {
         this.pageParentTitle = wp_page_parent_title;
     }
 
-    public boolean isUploading() {
-        return mIsUploading;
-    }
-
-    public void setUploading(boolean uploading) {
-        this.mIsUploading = uploading;
-    }
-
-    public boolean isUploaded() {
-        return uploaded;
-    }
-
-    public void setUploaded(boolean uploaded) {
-        this.uploaded = uploaded;
-    }
-
     public boolean isLocalChange() {
         return isLocalChange;
     }
@@ -410,12 +398,12 @@ public class Post implements Serializable {
      * the user first publishes a post
      * @return
      */
-    public boolean hasChangedFromLocalDraftToPublished() {
-        return mChangedFromLocalDraftToPublished;
+    public boolean hasChangedFromDraftToPublished() {
+        return mChangedFromLocalToPublished;
     }
 
-    public void setChangedFromLocalDraftToPublished(boolean changedFromLocalDraftToPublished) {
-        this.mChangedFromLocalDraftToPublished = changedFromLocalDraftToPublished;
+    public void setChangedFromDraftToPublished(boolean changedFromDraftToPublished) {
+        this.mChangedFromLocalToPublished = changedFromDraftToPublished;
     }
 
     /**
@@ -489,5 +477,29 @@ public class Post implements Serializable {
 
     public boolean isPublishable() {
         return !(getContent().isEmpty() && getPostExcerpt().isEmpty() && getTitle().isEmpty());
+    }
+
+    public boolean hasEmptyContentFields() {
+        return TextUtils.isEmpty(this.getTitle()) && TextUtils.isEmpty(this.getContent());
+    }
+
+    public long getFeaturedImageId() {
+        if (featuredImageId == FEATURED_IMAGE_INIT_VALUE) {
+            return 0;
+        }
+
+        return featuredImageId;
+    }
+
+    public void setFeaturedImageId(long id) {
+        if (featuredImageId == FEATURED_IMAGE_INIT_VALUE) {
+            lastKnownRemoteFeaturedImageId = id;
+        }
+
+        featuredImageId = id;
+    }
+
+    public boolean featuredImageHasChanged() {
+        return (lastKnownRemoteFeaturedImageId != featuredImageId);
     }
 }

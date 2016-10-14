@@ -1,19 +1,13 @@
 package org.wordpress.android.networking;
 
-import android.content.SharedPreferences;
-import android.preference.PreferenceManager;
-
 import org.wordpress.android.WordPress;
 import org.wordpress.android.models.Blog;
+import org.wordpress.android.models.AccountHelper;
 import org.wordpress.android.util.StringUtils;
 
 public class OAuthAuthenticator implements Authenticator {
-    @Override
-    public void authenticate(final AuthenticatorRequest request) {
-        String siteId = request.getSiteId();
-
-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(WordPress.getContext());
-        String token = settings.getString(WordPress.ACCESS_TOKEN_PREFERENCE, null);
+    public static String getAccessToken(final String siteId) {
+        String token = AccountHelper.getDefaultAccount().getAccessToken();
 
         if (siteId != null) {
             // Get the token for a Jetpack site if needed
@@ -29,6 +23,13 @@ public class OAuthAuthenticator implements Authenticator {
             }
         }
 
+        return token;
+    }
+
+    @Override
+    public void authenticate(final AuthenticatorRequest request) {
+        String siteId = request.getSiteId();
+        String token = getAccessToken(siteId);
         request.sendWithAccessToken(StringUtils.notNullStr(token));
     }
 }

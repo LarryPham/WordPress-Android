@@ -4,19 +4,22 @@ import android.app.Fragment;
 import android.content.Intent;
 import android.os.Bundle;
 import android.support.v7.app.ActionBar;
-import android.support.v7.app.ActionBarActivity;
+import android.support.v7.app.AppCompatActivity;
+import android.text.TextUtils;
 import android.view.MenuItem;
 import android.view.WindowManager;
 
 import com.simperium.client.BucketObjectMissingException;
 
-import org.wordpress.android.GCMIntentService;
+import org.wordpress.android.GCMMessageService;
 import org.wordpress.android.R;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.models.AccountHelper;
 import org.wordpress.android.models.CommentStatus;
 import org.wordpress.android.models.Note;
+import org.wordpress.android.ui.ActivityLauncher;
 import org.wordpress.android.ui.WPWebViewActivity;
 import org.wordpress.android.ui.comments.CommentActions;
-import org.wordpress.android.ui.comments.CommentDetailActivity;
 import org.wordpress.android.ui.comments.CommentDetailFragment;
 import org.wordpress.android.ui.notifications.blocks.NoteBlockRangeType;
 import org.wordpress.android.ui.notifications.utils.SimperiumUtils;
@@ -31,9 +34,20 @@ import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.StringUtils;
 import org.wordpress.android.util.ToastUtils;
 
-public class NotificationsDetailActivity extends ActionBarActivity implements
+import java.util.HashMap;
+import java.util.Map;
+
+import de.greenrobot.event.EventBus;
+
+import static org.wordpress.android.models.Note.NOTE_COMMENT_LIKE_TYPE;
+import static org.wordpress.android.models.Note.NOTE_COMMENT_TYPE;
+import static org.wordpress.android.models.Note.NOTE_FOLLOW_TYPE;
+import static org.wordpress.android.models.Note.NOTE_LIKE_TYPE;
+
+public class NotificationsDetailActivity extends AppCompatActivity implements
         CommentActions.OnNoteCommentActionListener {
     private static final String ARG_TITLE = "activityTitle";
+    private static final String DOMAIN_WPCOM = "wordpress.com";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -44,14 +58,13 @@ public class NotificationsDetailActivity extends ActionBarActivity implements
 
         ActionBar actionBar = getSupportActionBar();
         if (actionBar != null) {
-            actionBar.setElevation(0.0f);
             actionBar.setDisplayHomeAsUpEnabled(true);
         }
 
         if (savedInstanceState == null) {
             String noteId = getIntent().getStringExtra(NotificationsListFragment.NOTE_ID_EXTRA);
             if (noteId == null) {
-                ToastUtils.showToast(this, R.string.error_notification_open);
+                showErrorToastAndFinish();
                 return;
             }
 
@@ -59,25 +72,52 @@ public class NotificationsDetailActivity extends ActionBarActivity implements
                 try {
                     Note note = SimperiumUtils.getNotesBucket().get(noteId);
 
-                    // mark the note as read if it's unread
-                    if (note.isUnread()) {
-                        // mark as read which syncs with simperium
-                        note.markAsRead();
-                    }
+                    Map<String, String> properties = new HashMap<>();
+                    properties.put("notification_type", note.getType());
+                    AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATIONS_OPENED_NOTIFICATION_DETAILS, properties);
 
                     Fragment detailFragment = getDetailFragmentForNote(note);
                     getFragmentManager().beginTransaction()
                             .add(R.id.notifications_detail_container, detailFragment)
-                            .commit();
+                            .commitAllowingStateLoss();
 
+                    //set title
                     if (getSupportActionBar() != null) {
-                        getSupportActionBar().setTitle(note.getTitle());
+                        String title = note.getTitle();
+                        if (TextUtils.isEmpty(title)) {
+                            //set a deafult title if title is not set within the note
+                            switch(note.getType()) {
+                                case NOTE_FOLLOW_TYPE:
+                                    title = getString(R.string.follows);
+                                    break;
+                                case NOTE_COMMENT_LIKE_TYPE:
+                                    title = getString(R.string.comment_likes);
+                                    break;
+                                case NOTE_LIKE_TYPE:
+                                    title = getString(R.string.like);
+                                    break;
+                                case NOTE_COMMENT_TYPE:
+                                    title = getString(R.string.comment);
+                                    break;
+                            }
+                        }
+                        getSupportActionBar().setTitle(title);
+                    }
+
+                    // mark the note as read if it's unread
+                    if (note.isUnread()) {
+                        // mark as read which syncs with simperium
+                        note.markAsRead();
+                        EventBus.getDefault().post(new NotificationEvents.NotificationsChanged());
                     }
                 } catch (BucketObjectMissingException e) {
-                    AppLog.e(AppLog.T.NOTIFS, "Note could not be found.");
-                    ToastUtils.showToast(this, R.string.error_notification_open);
+                    showErrorToastAndFinish();
+                    return;
                 }
             }
+
+            GCMMessageService.removeNotificationWithNoteIdFromSystemBar(this, noteId);//clearNotifications();
+
         } else if (savedInstanceState.containsKey(ARG_TITLE) && getSupportActionBar() != null) {
             getSupportActionBar().setTitle(StringUtils.notNullStr(savedInstanceState.getString(ARG_TITLE)));
         }
@@ -87,23 +127,16 @@ public class NotificationsDetailActivity extends ActionBarActivity implements
             getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN);
         }
 
-        GCMIntentService.clearNotificationsMap();
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == android.R.id.home) {
-            onBackPressed();
+            finish();
             return true;
         }
 
         return super.onOptionsItemSelected(item);
-    }
-
-    @Override
-    public void onBackPressed() {
-        super.onBackPressed();
-        overridePendingTransition(R.anim.reader_activity_scale_in, R.anim.reader_activity_slide_out);
     }
 
     @Override
@@ -113,6 +146,12 @@ public class NotificationsDetailActivity extends ActionBarActivity implements
         }
 
         super.onSaveInstanceState(outState);
+    }
+
+    private void showErrorToastAndFinish() {
+        AppLog.e(AppLog.T.NOTIFS, "Note could not be found.");
+        ToastUtils.showToast(this, R.string.error_notification_open);
+        finish();
     }
 
     /**
@@ -126,7 +165,13 @@ public class NotificationsDetailActivity extends ActionBarActivity implements
         Fragment fragment;
         if (note.isCommentType()) {
             // show comment detail for comment notifications
-            fragment = CommentDetailFragment.newInstance(note.getId());
+            boolean isInstantLike = getIntent().getBooleanExtra(NotificationsListFragment.NOTE_INSTANT_LIKE_EXTRA, false);
+            boolean isInstantApprove = getIntent().getBooleanExtra(NotificationsListFragment.NOTE_INSTANT_APPROVE_EXTRA, false);
+            fragment = isInstantLike ?
+                        CommentDetailFragment.newInstanceForInstantLike(note.getId()) :
+                        isInstantApprove ?
+                            CommentDetailFragment.newInstanceForInstantApprove(note.getId()) :
+                            CommentDetailFragment.newInstance(note.getId());
         } else if (note.isAutomattcherType()) {
             // show reader post detail for automattchers about posts - note that comment
             // automattchers are handled by note.isCommentType() above
@@ -141,15 +186,6 @@ public class NotificationsDetailActivity extends ActionBarActivity implements
         }
 
         return fragment;
-    }
-
-    public void showCommentDetailForNote(Note note) {
-        if (isFinishing() || note == null) return;
-
-        Intent intent = new Intent(this, CommentDetailActivity.class);
-        intent.putExtra(CommentDetailActivity.KEY_COMMENT_DETAIL_IS_REMOTE, true);
-        intent.putExtra(CommentDetailActivity.KEY_COMMENT_DETAIL_NOTE_ID, note.getId());
-        startActivity(intent);
     }
 
     public void showBlogPreviewActivity(long siteId) {
@@ -167,24 +203,39 @@ public class NotificationsDetailActivity extends ActionBarActivity implements
     public void showStatsActivityForSite(int localTableSiteId, NoteBlockRangeType rangeType) {
         if (isFinishing()) return;
 
-        Intent intent;
         if (rangeType == NoteBlockRangeType.FOLLOW) {
-            intent = new Intent(this, StatsViewAllActivity.class);
+            Intent intent = new Intent(this, StatsViewAllActivity.class);
             intent.putExtra(StatsAbstractFragment.ARGS_VIEW_TYPE, StatsViewType.FOLLOWERS);
             intent.putExtra(StatsAbstractFragment.ARGS_TIMEFRAME, StatsTimeframe.DAY);
+            intent.putExtra(StatsAbstractFragment.ARGS_SELECTED_DATE, "");
+            intent.putExtra(StatsActivity.ARG_LOCAL_TABLE_BLOG_ID, localTableSiteId);
+            intent.putExtra(StatsViewAllActivity.ARG_STATS_VIEW_ALL_TITLE, getString(R.string.stats_view_followers));
+            startActivity(intent);
         } else {
-            intent = new Intent(this, StatsActivity.class);
-            intent.putExtra(StatsActivity.ARG_NO_MENU_DRAWER, true);
+            ActivityLauncher.viewBlogStats(this, localTableSiteId);
         }
-
-        intent.putExtra(StatsActivity.ARG_LOCAL_TABLE_BLOG_ID, localTableSiteId);
-        startActivity(intent);
     }
 
     public void showWebViewActivityForUrl(String url) {
         if (isFinishing() || url == null) return;
 
-        WPWebViewActivity.openURL(this, url);
+        if (url.contains(DOMAIN_WPCOM)) {
+            WPWebViewActivity.openUrlByUsingWPCOMCredentials(this, url, AccountHelper.getDefaultAccount().getUserName());
+        } else {
+            WPWebViewActivity.openURL(this, url);
+        }
+    }
+
+    public void showReaderPostLikeUsers(long blogId, long postId) {
+        if (isFinishing()) return;
+
+        ReaderActivityLauncher.showReaderLikingUsers(this, blogId, postId);
+    }
+
+    public void showReaderCommentsList(long siteId, long postId, long commentId) {
+        if (isFinishing()) return;
+
+        ReaderActivityLauncher.showReaderComments(this, siteId, postId, commentId);
     }
 
     @Override

@@ -1,108 +1,114 @@
 package org.wordpress.android.ui.reader;
 
-import android.app.Activity;
 import android.app.Fragment;
-import android.content.Intent;
 import android.os.Bundle;
+import android.support.annotation.NonNull;
+import android.support.design.widget.AppBarLayout;
+import android.support.design.widget.CoordinatorLayout;
+import android.support.v7.app.ActionBar;
+import android.support.v7.app.AppCompatActivity;
+import android.support.v7.widget.Toolbar;
+import android.view.MenuItem;
 import android.view.View;
 
 import org.wordpress.android.R;
-import org.wordpress.android.analytics.AnalyticsTracker;
-import org.wordpress.android.datasets.ReaderTagTable;
 import org.wordpress.android.models.ReaderTag;
-import org.wordpress.android.ui.WPDrawerActivity;
-import org.wordpress.android.ui.accounts.SignInActivity;
-import org.wordpress.android.ui.prefs.AppPrefs;
-import org.wordpress.android.util.AppLog;
-import org.wordpress.android.util.AppLog.T;
-
-import javax.annotation.Nonnull;
-
-import de.greenrobot.event.EventBus;
+import org.wordpress.android.ui.reader.ReaderTypes.ReaderPostListType;
 
 /*
- * this activity serves as the host for ReaderPostListFragment
+ * serves as the host for ReaderPostListFragment when showing blog preview & tag preview
  */
 
-public class ReaderPostListActivity extends WPDrawerActivity {
+public class ReaderPostListActivity extends AppCompatActivity {
+
+    private ReaderPostListType mPostListType;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        createMenuDrawer(R.layout.reader_activity_post_list);
-        readIntent(getIntent(), savedInstanceState);
-    }
+        setContentView(R.layout.reader_activity_post_list);
 
-    private void readIntent(Intent intent, Bundle savedInstanceState) {
-        if (intent == null) {
-            return;
+        Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+        ActionBar actionBar = getSupportActionBar();
+        if (actionBar != null) {
+            actionBar.setDisplayShowTitleEnabled(true);
+            actionBar.setDisplayHomeAsUpEnabled(true);
         }
 
-        ReaderTypes.ReaderPostListType postListType;
-        if (intent.hasExtra(ReaderConstants.ARG_POST_LIST_TYPE)) {
-            postListType = (ReaderTypes.ReaderPostListType) intent.getSerializableExtra(ReaderConstants.ARG_POST_LIST_TYPE);
+        if (getIntent().hasExtra(ReaderConstants.ARG_POST_LIST_TYPE)) {
+            mPostListType = (ReaderPostListType) getIntent().getSerializableExtra(ReaderConstants.ARG_POST_LIST_TYPE);
         } else {
-            postListType = ReaderTypes.DEFAULT_POST_LIST_TYPE;
+            mPostListType = ReaderTypes.DEFAULT_POST_LIST_TYPE;
         }
 
-        // hide drawer toggle and enable back arrow click if this is blog preview or tag preview
-        if (postListType.isPreviewType() && getDrawerToggle() != null) {
-            getDrawerToggle().setDrawerIndicatorEnabled(false);
-            getToolbar().setNavigationOnClickListener(new View.OnClickListener() {
+        if (getPostListType() == ReaderPostListType.TAG_PREVIEW || getPostListType() == ReaderPostListType.BLOG_PREVIEW) {
+            // show an X in the toolbar which closes the activity - if this is tag preview, then
+            // using the back button will navigate through tags if the user explores beyond a single tag
+            toolbar.setNavigationIcon(R.drawable.ic_close_white_24dp);
+            toolbar.setNavigationOnClickListener(new View.OnClickListener() {
                 @Override
-                public void onClick(View v) {
-                    onBackPressed();
+                public void onClick(View view) {
+                    finish();
                 }
             });
-        }
 
-        if (savedInstanceState == null) {
-            AnalyticsTracker.track(AnalyticsTracker.Stat.READER_ACCESSED);
-
-            if (postListType == ReaderTypes.ReaderPostListType.BLOG_PREVIEW) {
-                long blogId = intent.getLongExtra(ReaderConstants.ARG_BLOG_ID, 0);
-                long feedId = intent.getLongExtra(ReaderConstants.ARG_FEED_ID, 0);
-                if (feedId != 0) {
-                    showListFragmentForFeed(feedId);
-                } else {
-                    showListFragmentForBlog(blogId);
-                }
-            } else {
-                // get the tag name from the intent, if not there get it from prefs
-                ReaderTag tag;
-                if (intent.hasExtra(ReaderConstants.ARG_TAG)) {
-                    tag = (ReaderTag) intent.getSerializableExtra(ReaderConstants.ARG_TAG);
-                } else  {
-                    tag = AppPrefs.getReaderTag();
-                }
-                // if this is a followed tag and it doesn't exist, revert to default tag
-                if (postListType == ReaderTypes.ReaderPostListType.TAG_FOLLOWED && !ReaderTagTable.tagExists(tag)) {
-                    tag = ReaderTag.getDefaultTag();
-                }
-
-                showListFragmentForTag(tag, postListType);
-            }
-        }
-
-        switch (postListType) {
-            case TAG_PREVIEW:
-                setTitle(R.string.reader_title_tag_preview);
-                break;
-            case BLOG_PREVIEW:
+            if (getPostListType() == ReaderPostListType.BLOG_PREVIEW) {
                 setTitle(R.string.reader_title_blog_preview);
-                break;
-            default:
-                break;
-        }
-
-        // hide the static drawer for blog/tag preview
-        if (isStaticMenuDrawer() && postListType.isPreviewType()) {
-            hideDrawer();
+                if (savedInstanceState == null) {
+                    long blogId = getIntent().getLongExtra(ReaderConstants.ARG_BLOG_ID, 0);
+                    long feedId = getIntent().getLongExtra(ReaderConstants.ARG_FEED_ID, 0);
+                    if (feedId != 0) {
+                        showListFragmentForFeed(feedId);
+                    } else {
+                        showListFragmentForBlog(blogId);
+                    }
+                }
+            } else if (getPostListType() == ReaderPostListType.TAG_PREVIEW) {
+                setTitle(R.string.reader_title_tag_preview);
+                ReaderTag tag = (ReaderTag) getIntent().getSerializableExtra(ReaderConstants.ARG_TAG);
+                if (tag != null && savedInstanceState == null) {
+                    showListFragmentForTag(tag, mPostListType);
+                }
+            }
         }
     }
 
     @Override
-    public void onSaveInstanceState(@Nonnull Bundle outState) {
+    protected void onResumeFragments() {
+        super.onResumeFragments();
+        //this particular Activity doesn't show filtering, so we'll disable the FilteredRecyclerView toolbar here
+        disableFilteredRecyclerViewToolbar();
+    }
+
+    /*
+    * This method hides the FilteredRecyclerView toolbar with spinner so to disable content filtering, for reusability
+    * */
+    private void disableFilteredRecyclerViewToolbar(){
+        // make it invisible - setting height to zero here because setting visibility to View.GONE wouldn't take the
+        // occupied space, as otherwise expected
+        AppBarLayout appBarLayout = (AppBarLayout) findViewById(R.id.app_bar_layout);
+        if (appBarLayout != null) {
+            CoordinatorLayout.LayoutParams lp = (CoordinatorLayout.LayoutParams)appBarLayout.getLayoutParams();
+            lp.height = 0;
+            appBarLayout.setLayoutParams(lp);
+        }
+
+        // disabling any CoordinatorLayout behavior for scrolling
+        Toolbar toolbarWithSpinner = (Toolbar) findViewById(R.id.toolbar_with_spinner);
+        if (toolbarWithSpinner != null){
+            AppBarLayout.LayoutParams p = (AppBarLayout.LayoutParams) toolbarWithSpinner.getLayoutParams();
+            p.setScrollFlags(0);
+            toolbarWithSpinner.setLayoutParams(p);
+        }
+    }
+
+    private ReaderPostListType getPostListType() {
+        return (mPostListType != null ? mPostListType : ReaderTypes.DEFAULT_POST_LIST_TYPE);
+    }
+
+    @Override
+    public void onSaveInstanceState(@NonNull Bundle outState) {
         if (outState.isEmpty()) {
             outState.putBoolean("bug_19917_fix", true);
         }
@@ -112,64 +118,24 @@ public class ReaderPostListActivity extends WPDrawerActivity {
     @Override
     public void onBackPressed() {
         ReaderPostListFragment fragment = getListFragment();
-        if (fragment == null || !fragment.goBackInTagHistory()) {
-            setToolbarClickListener();
+        if (fragment == null || !fragment.onActivityBackPressed()) {
             super.onBackPressed();
         }
     }
 
     @Override
-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        switch (requestCode) {
-            // user just returned from the login dialog, need to perform initial update again
-            // since creds have changed
-            case SignInActivity.REQUEST_CODE:
-                if (resultCode == Activity.RESULT_OK) {
-                    removeListFragment();
-                    EventBus.getDefault().removeStickyEvent(ReaderEvents.HasPerformedInitialUpdate.class);
-                }
-                break;
-
-            // pass reader-related results to the fragment
-            case ReaderConstants.INTENT_READER_SUBS:
-            case ReaderConstants.INTENT_READER_REBLOG:
-                ReaderPostListFragment listFragment = getListFragment();
-                if (listFragment != null) {
-                    listFragment.onActivityResult(requestCode, resultCode, data);
-                }
-                break;
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == android.R.id.home) {
+            onBackPressed();
+            return true;
         }
-    }
-
-    @Override
-    public void onSignout() {
-        super.onSignout();
-
-        AppLog.i(T.READER, "reader post list > user signed out");
-        EventBus.getDefault().removeStickyEvent(ReaderEvents.HasPerformedInitialUpdate.class);
-
-        // reader database will have been cleared by the time this is called, but the fragment must
-        // be removed or else it will continue to show the same articles - onResume() will take
-        // care of re-displaying the correct fragment if necessary
-        removeListFragment();
-    }
-
-    private void removeListFragment() {
-        Fragment listFragment = getListFragment();
-        if (listFragment != null) {
-            getFragmentManager()
-                    .beginTransaction()
-                    .remove(listFragment)
-                    .commit();
-        }
+        return super.onOptionsItemSelected(item);
     }
 
     /*
      * show fragment containing list of latest posts for a specific tag
      */
-    private void showListFragmentForTag(final ReaderTag tag, ReaderTypes.ReaderPostListType listType) {
+    private void showListFragmentForTag(final ReaderTag tag, ReaderPostListType listType) {
         if (isFinishing()) {
             return;
         }

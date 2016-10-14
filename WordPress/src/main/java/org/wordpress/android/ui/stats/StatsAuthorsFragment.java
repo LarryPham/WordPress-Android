@@ -1,11 +1,13 @@
 package org.wordpress.android.ui.stats;
 
 import android.app.Activity;
+import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseExpandableListAdapter;
 
+import org.apache.commons.lang.StringUtils;
 import org.wordpress.android.R;
 import org.wordpress.android.ui.stats.models.AuthorModel;
 import org.wordpress.android.ui.stats.models.AuthorsModel;
@@ -21,38 +23,75 @@ import java.util.List;
 public class StatsAuthorsFragment extends StatsAbstractListFragment {
     public static final String TAG = StatsAuthorsFragment.class.getSimpleName();
 
+    private AuthorsModel mAuthors;
+
+    @Override
+    protected boolean hasDataAvailable() {
+        return mAuthors != null;
+    }
+    @Override
+    protected void saveStatsData(Bundle outState) {
+        if (hasDataAvailable()) {
+            outState.putSerializable(ARG_REST_RESPONSE, mAuthors);
+        }
+    }
+    @Override
+    protected void restoreStatsData(Bundle savedInstanceState) {
+        if (savedInstanceState.containsKey(ARG_REST_RESPONSE)) {
+            mAuthors = (AuthorsModel) savedInstanceState.getSerializable(ARG_REST_RESPONSE);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.AuthorsUpdated event) {
+        if (!shouldUpdateFragmentOnUpdateEvent(event)) {
+            return;
+        }
+
+        mGroupIdToExpandedMap.clear();
+        mAuthors = event.mAuthors;
+
+        updateUI();
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.SectionUpdateError event) {
+        if (!shouldUpdateFragmentOnErrorEvent(event)) {
+            return;
+        }
+
+        mAuthors = null;
+        mGroupIdToExpandedMap.clear();
+        showErrorUI(event.mError);
+    }
+
     @Override
     protected void updateUI() {
         if (!isAdded()) {
             return;
         }
 
-        if (isErrorResponse()) {
-            showErrorUI();
-            return;
-        }
-
-        if (isDataEmpty()) {
+        if (!hasAuthors()) {
             showHideNoResultsUI(true);
             return;
         }
 
-        List<AuthorModel> authors = ((AuthorsModel) mDatamodels[0]).getAuthors();
-        if (authors == null || authors.size() == 0) {
-            showHideNoResultsUI(true);
-            return;
-        }
-
-        BaseExpandableListAdapter adapter = new MyExpandableListAdapter(getActivity(), authors);
+        BaseExpandableListAdapter adapter = new MyExpandableListAdapter(getActivity(), mAuthors.getAuthors());
         StatsUIHelper.reloadGroupViews(getActivity(), adapter, mGroupIdToExpandedMap, mList, getMaxNumberOfItemsToShowInList());
         showHideNoResultsUI(false);
     }
 
+    private boolean hasAuthors() {
+        return mAuthors != null
+                && mAuthors.getAuthors() != null
+                && mAuthors.getAuthors().size() > 0;
+    }
+
+
     @Override
     protected boolean isViewAllOptionAvailable() {
-        return (!isDataEmpty(0)
-                && ((AuthorsModel) mDatamodels[0]).getAuthors() != null
-                && ((AuthorsModel) mDatamodels[0]).getAuthors().size() > MAX_NUM_OF_ITEMS_DISPLAYED_IN_LIST);
+        return (hasAuthors()
+                && mAuthors.getAuthors().size() > MAX_NUM_OF_ITEMS_DISPLAYED_IN_LIST);
     }
 
     @Override
@@ -61,7 +100,7 @@ public class StatsAuthorsFragment extends StatsAbstractListFragment {
     }
 
     @Override
-    protected StatsService.StatsEndpointsEnum[] getSectionsToUpdate() {
+    protected StatsService.StatsEndpointsEnum[] sectionsToUpdate() {
         return new StatsService.StatsEndpointsEnum[]{
                 StatsService.StatsEndpointsEnum.AUTHORS
         };
@@ -85,9 +124,9 @@ public class StatsAuthorsFragment extends StatsAbstractListFragment {
     }
 
     private class MyExpandableListAdapter extends BaseExpandableListAdapter {
-        public LayoutInflater inflater;
-        public Activity activity;
-        private List<AuthorModel> authors;
+        public final LayoutInflater inflater;
+        public final Activity activity;
+        private final List<AuthorModel> authors;
 
         public MyExpandableListAdapter(Activity act, List<AuthorModel> authors) {
             this.activity = act;
@@ -182,6 +221,10 @@ public class StatsAuthorsFragment extends StatsAbstractListFragment {
             AuthorModel group = (AuthorModel) getGroup(groupPosition);
 
             String name = group.getName();
+            if (StringUtils.isBlank(name)) {
+                // Jetpack case: articles published before the activation of Jetpack.
+                name = getString(R.string.stats_unknown_author);
+            }
             int total = group.getViews();
             String icon = group.getAvatar();
             int children = getChildrenCount(groupPosition);

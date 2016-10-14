@@ -8,12 +8,11 @@ import org.json.JSONObject;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.StringUtils;
 
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
-public class VisitsModel implements Serializable {
+public class VisitsModel extends BaseStatsModel {
     private String mFields; // Holds a JSON Object
     private String mUnit;
     private String mDate;
@@ -68,6 +67,7 @@ public class VisitsModel implements Serializable {
                 try {
                     JSONArray currentDayData = dataJSON.getJSONArray(i);
                     VisitModel currentVisitModel = new VisitModel();
+                    currentVisitModel.setBlogID(getBlogID());
                     currentVisitModel.setPeriod(currentDayData.getString(periodColumnIndex));
                     currentVisitModel.setViews(currentDayData.getInt(viewsColumnIndex));
                     currentVisitModel.setVisitors(currentDayData.getInt(visitorsColumnIndex));
@@ -90,7 +90,7 @@ public class VisitsModel implements Serializable {
         return mBlogID;
     }
 
-    public void setBlogID(String blogID) {
+    private void setBlogID(String blogID) {
         this.mBlogID = blogID;
     }
 
@@ -98,7 +98,7 @@ public class VisitsModel implements Serializable {
         return mDate;
     }
 
-    public void setDate(String date) {
+    private void setDate(String date) {
         this.mDate = date;
     }
 
@@ -106,7 +106,7 @@ public class VisitsModel implements Serializable {
         return mUnit;
     }
 
-    public void setUnit(String unit) {
+    private void setUnit(String unit) {
         this.mUnit = unit;
     }
 

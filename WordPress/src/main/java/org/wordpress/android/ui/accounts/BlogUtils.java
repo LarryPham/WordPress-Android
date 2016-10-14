@@ -1,15 +1,18 @@
 package org.wordpress.android.ui.accounts;
 
 import android.content.Context;
+import android.support.annotation.NonNull;
+import android.text.Editable;
 
-import org.wordpress.android.R;
 import org.wordpress.android.WordPress;
 import org.wordpress.android.models.Blog;
+import org.wordpress.android.ui.stats.datasets.StatsTable;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.AppLog.T;
 import org.wordpress.android.util.MapUtils;
 import org.wordpress.android.util.StringUtils;
 import org.wordpress.android.util.UrlUtils;
+import org.wordpress.android.util.WPUrlUtils;
 
 import java.util.HashSet;
 import java.util.List;
@@ -18,6 +21,8 @@ import java.util.Set;
 
 public class BlogUtils {
     private static final String DEFAULT_IMAGE_SIZE = "2000";
+
+    public static final int BLOG_ID_INVALID = 0;
 
     /**
      * Remove blogs that are not in the list and add others
@@ -33,14 +38,15 @@ public class BlogUtils {
         retValue = addBlogs(newBlogList, username);
 
         // Delete blogs if not in blogList
-        List<Map<String, Object>> allBlogs = WordPress.wpDB.getAccountsBy("dotcomFlag=1", null);
+        List<Map<String, Object>> allBlogs = WordPress.wpDB.getBlogsBy("dotcomFlag=1", null);
         Set<String> newBlogURLs = new HashSet<String>();
         for (Map<String, Object> blog : newBlogList) {
             newBlogURLs.add(blog.get("xmlrpc").toString() + blog.get("blogid").toString());
         }
         for (Map<String, Object> blog : allBlogs) {
             if (!newBlogURLs.contains(blog.get("url").toString() + blog.get("blogId"))) {
-                WordPress.wpDB.deleteAccount(context, Integer.parseInt(blog.get("id").toString()));
+                WordPress.wpDB.deleteBlog(context, Integer.parseInt(blog.get("id").toString()));
+                StatsTable.deleteStatsForBlog(context, Integer.parseInt(blog.get("id").toString())); // Remove stats data
                 retValue = true;
             }
         }
@@ -65,8 +71,15 @@ public class BlogUtils {
                 isVisible = MapUtils.getMapBool(blogMap, "isVisible");
             }
             boolean isAdmin = MapUtils.getMapBool(blogMap, "isAdmin");
+            long planID = 0;
+            if (blogMap.containsKey("planID")) {
+                planID = MapUtils.getMapLong(blogMap, "planID");
+            }
+            String planShortName = MapUtils.getMapStr(blogMap, "plan_product_name_short");
+            String capabilities = MapUtils.getMapStr(blogMap, "capabilities");
+
             retValue |= addOrUpdateBlog(blogName, xmlrpc, homeUrl, blogId, username, password, httpUsername,
-                    httpPassword, isAdmin, isVisible);
+                    httpPassword, isAdmin, isVisible, planID, planShortName, capabilities);
         }
         return retValue;
     }
@@ -94,8 +107,9 @@ public class BlogUtils {
      * Return false if no change has been made.
      */
     public static boolean addOrUpdateBlog(String blogName, String xmlRpcUrl, String homeUrl, String blogId,
-                                           String username, String password, String httpUsername, String httpPassword,
-                                           boolean isAdmin, boolean isVisible) {
+                                          String username, String password, String httpUsername, String httpPassword,
+                                          boolean isAdmin, boolean isVisible,
+                                          long planID, String planShortName, String capabilities) {
         Blog blog;
         if (!WordPress.wpDB.isBlogInDatabase(Integer.parseInt(blogId), xmlRpcUrl)) {
             // The blog isn't in the app, so let's create it
@@ -111,21 +125,40 @@ public class BlogUtils {
             // deprecated
             blog.setMaxImageWidthId(0);
             blog.setRemoteBlogId(Integer.parseInt(blogId));
-            blog.setDotcomFlag(xmlRpcUrl.contains("wordpress.com"));
+            blog.setDotcomFlag(WPUrlUtils.isWordPressCom(xmlRpcUrl));
             // assigned later in getOptions call
             blog.setWpVersion("");
             blog.setAdmin(isAdmin);
             blog.setHidden(!isVisible);
+            blog.setPlanID(planID);
+            blog.setPlanShortName(planShortName);
+            blog.setCapabilities(capabilities);
             WordPress.wpDB.saveBlog(blog);
             return true;
         } else {
-            // Update blog name
+            // Update blog name and/or PlanID/PlanShortName
             int localTableBlogId = WordPress.wpDB.getLocalTableBlogIdForRemoteBlogIdAndXmlRpcUrl(
                     Integer.parseInt(blogId), xmlRpcUrl);
             try {
+                boolean blogUpdated = false;
                 blog = WordPress.wpDB.instantiateBlogByLocalId(localTableBlogId);
                 if (!blogName.equals(blog.getBlogName())) {
                     blog.setBlogName(blogName);
+                    blogUpdated = true;
+                }
+                if (planID != blog.getPlanID()) {
+                    blog.setPlanID(planID);
+                    blogUpdated = true;
+                }
+                if (!blog.getPlanShortName().equals(planShortName)) {
+                    blog.setPlanShortName(planShortName);
+                    blogUpdated = true;
+                }
+                if (blog.getCapabilities() == null || !blog.getCapabilities().equals(capabilities)) {
+                    blog.setCapabilities(capabilities);
+                    blogUpdated = true;
+                }
+                if (blogUpdated) {
                     WordPress.wpDB.saveBlog(blog);
                     return true;
                 }
@@ -138,5 +171,41 @@ public class BlogUtils {
 
     public static boolean addBlogs(List<Map<String, Object>> userBlogList, String username) {
         return addBlogs(userBlogList, username, null, null, null);
+    }
+
+    /**
+     * Get a Blog's local Id.
+     *
+     * @param blog The Blog to get its local ID
+     * @return Blog's local id or {@value BlogUtils#BLOG_ID_INVALID} if null
+     */
+    public static int getBlogLocalId(final Blog blog) {
+        return (blog != null ? blog.getLocalTableBlogId() : BLOG_ID_INVALID);
+    }
+
+    public static void convertToLowercase(Editable s) {
+        String lowerCase = s.toString().toLowerCase();
+        if (!lowerCase.equals(s.toString())) {
+            s.replace(0, s.length(), lowerCase);
+        }
+    }
+
+    @NonNull
+    public static Set<String> planTags() {
+        String[] extraFields = {"plan_product_id"};
+        List<Map<String, Object>> blogs = WordPress.wpDB.getBlogsBy("dotcomFlag=1", extraFields);
+        Set<String> tags = new HashSet<>();
+
+        for (Map<String, Object> blog : blogs) {
+            int planId = MapUtils.getMapInt(blog, "plan_product_id");
+            if (planId == 0) {
+                // Skip unknown plans, MapUtils will turn any missing plan ID into 0
+                continue;
+            }
+            String tag = String.format("plan:%d", planId);
+            tags.add(tag);
+        }
+
+        return tags;
     }
 }

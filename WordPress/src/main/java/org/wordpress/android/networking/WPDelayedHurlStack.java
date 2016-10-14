@@ -19,9 +19,11 @@ import org.apache.http.message.BasicHttpResponse;
 import org.apache.http.message.BasicStatusLine;
 import org.wordpress.android.WordPress;
 import org.wordpress.android.models.Blog;
+import org.wordpress.android.models.AccountHelper;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.AppLog.T;
-import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.UrlUtils;
+import org.wordpress.android.util.WPUrlUtils;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -86,27 +88,52 @@ public class WPDelayedHurlStack implements HttpStack {
         sslContextInitializer.start();
     }
 
+
+    private static boolean hasAuthorizationHeader(Request request) {
+        try {
+            if (request.getHeaders() != null && request.getHeaders().containsKey("Authorization")) {
+                return true;
+            }
+        } catch (AuthFailureError e) {
+            // nope
+        }
+
+        return false;
+    }
+
     @Override
     public HttpResponse performRequest(Request<?> request, Map<String, String> additionalHeaders)
             throws IOException, AuthFailureError {
         if (request.getUrl() != null) {
-            if (!StringUtils.getHost(request.getUrl()).endsWith("wordpress.com") && mCurrentBlog != null
+            if (!WPUrlUtils.isWordPressCom(request.getUrl()) && mCurrentBlog != null
                     && mCurrentBlog.hasValidHTTPAuthCredentials()) {
                 String creds = String.format("%s:%s", mCurrentBlog.getHttpuser(), mCurrentBlog.getHttppassword());
                 String auth = "Basic " + Base64.encodeToString(creds.getBytes(), Base64.DEFAULT);
                 additionalHeaders.put("Authorization", auth);
             }
 
-            if (StringUtils.getHost(request.getUrl()).endsWith("files.wordpress.com") && mCtx != null
-                    && WordPress.getWPComAuthToken(mCtx) != null) {
-                // Add the auth header to access private WP.com files
-                additionalHeaders.put("Authorization", "Bearer " + WordPress.getWPComAuthToken(mCtx));
+            /**
+             *  Add the Authorization header to access private WP.com files.
+             *
+             *  Note: Additional headers have precedence over request headers, so add Authorization only it it's not already
+             *  available in the request.
+             *
+             */
+            if (WPUrlUtils.safeToAddWordPressComAuthToken(request.getUrl()) && mCtx != null
+                    && AccountHelper.isSignedInWordPressDotCom() && !hasAuthorizationHeader(request)) {
+                additionalHeaders.put("Authorization", "Bearer " + AccountHelper.getDefaultAccount().getAccessToken());
             }
         }
 
         additionalHeaders.put("User-Agent", WordPress.getUserAgent());
 
         String url = request.getUrl();
+
+        // Ensure that an HTTPS request is made to wpcom when Authorization is set.
+        if (additionalHeaders.containsKey("Authorization") || hasAuthorizationHeader(request)) {
+            url = UrlUtils.makeHttps(url);
+        }
+
         HashMap<String, String> map = new HashMap<String, String>();
         map.putAll(request.getHeaders());
         map.putAll(additionalHeaders);
@@ -163,8 +190,8 @@ public class WPDelayedHurlStack implements HttpStack {
      */
     protected HttpURLConnection createConnection(URL url) throws IOException {
         // Check that the custom SslSocketFactory is not null on HTTPS connections
-        if ("https".equals(url.getProtocol()) && !url.getHost().endsWith("wordpress.com")
-                && !url.getHost().endsWith("gravatar.com")) {
+        if (UrlUtils.isHttps(url) && !WPUrlUtils.isWordPressCom(url)
+                && !WPUrlUtils.isGravatar(url)) {
             // WordPress.com doesn't need the custom mSslSocketFactory
             synchronized (monitor) {
                 while (mSslSocketFactory == null) {

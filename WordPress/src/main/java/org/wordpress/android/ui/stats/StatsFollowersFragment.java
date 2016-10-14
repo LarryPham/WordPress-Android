@@ -17,28 +17,24 @@ import org.wordpress.android.ui.stats.models.FollowDataModel;
 import org.wordpress.android.ui.stats.models.FollowerModel;
 import org.wordpress.android.ui.stats.models.FollowersModel;
 import org.wordpress.android.ui.stats.service.StatsService;
-import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.DisplayUtils;
 import org.wordpress.android.util.FormatUtils;
 import org.wordpress.android.util.GravatarUtils;
 import org.wordpress.android.util.UrlUtils;
 import org.wordpress.android.widgets.WPNetworkImageView;
 
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 
 public class StatsFollowersFragment extends StatsAbstractListFragment {
     public static final String TAG = StatsFollowersFragment.class.getSimpleName();
 
-    private Map<String, Integer> userBlogs = new HashMap<>();
+    private static final String ARG_REST_RESPONSE_FOLLOWERS_EMAIL = "ARG_REST_RESPONSE_FOLLOWERS_EMAIL";
+    private final Map<String, Integer> userBlogs = new HashMap<>();
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -64,15 +60,6 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (savedInstanceState != null) {
-            AppLog.d(AppLog.T.STATS, this.getTag() + " > restoring instance state");
-            if (savedInstanceState.containsKey(ARGS_TOP_PAGER_SELECTED_BUTTON_INDEX)) {
-                mTopPagerSelectedButtonIndex = savedInstanceState.getInt(ARGS_TOP_PAGER_SELECTED_BUTTON_INDEX);
-            }
-        } else {
-            // first time it's created
-            mTopPagerSelectedButtonIndex = getArguments().getInt(ARGS_TOP_PAGER_SELECTED_BUTTON_INDEX, 0);
-        }
 
         // Single background thread used to create the blogs list in BG
         ThreadPoolExecutor blogsListCreatorExecutor = (ThreadPoolExecutor) Executors.newFixedThreadPool(1);
@@ -81,11 +68,12 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
             public void run() {
                 // Read all the dotcomBlog blogs and get the list of home URLs.
                 // This will be used later to check if the user is a member of followers blog marked as private.
-                List <Map<String, Object>> dotComUserBlogs = WordPress.wpDB.getAccountsBy("dotcomFlag=1", new String[]{"homeURL"});
+                List<Map<String, Object>> dotComUserBlogs = WordPress.wpDB.getBlogsBy("dotcomFlag=1",
+                        new String[]{"homeURL"});
                 for (Map<String, Object> blog : dotComUserBlogs) {
                     if (blog != null && blog.get("homeURL") != null && blog.get("blogId") != null) {
                         String normURL = normalizeAndRemoveScheme(blog.get("homeURL").toString());
-                        Integer blogID = (Integer)blog.get("blogId");
+                        Integer blogID = (Integer) blog.get("blogId");
                         userBlogs.put(normURL, blogID);
                     }
                 }
@@ -93,11 +81,61 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
         });
     }
 
+    private FollowersModel mFollowersWPCOM;
+    private FollowersModel mFollowersEmail;
+
     @Override
-    public void onSaveInstanceState(Bundle outState) {
-        //AppLog.d(AppLog.T.STATS, this.getTag() + " > saving instance state");
-        outState.putInt(ARGS_TOP_PAGER_SELECTED_BUTTON_INDEX, mTopPagerSelectedButtonIndex);
-        super.onSaveInstanceState(outState);
+    protected boolean hasDataAvailable() {
+        return mFollowersWPCOM != null || mFollowersEmail != null;
+    }
+    @Override
+    protected void saveStatsData(Bundle outState) {
+        if (mFollowersWPCOM != null) {
+            outState.putSerializable(ARG_REST_RESPONSE, mFollowersWPCOM);
+        }
+        if (mFollowersEmail != null) {
+            outState.putSerializable(ARG_REST_RESPONSE_FOLLOWERS_EMAIL, mFollowersEmail);
+        }
+    }
+    @Override
+    protected void restoreStatsData(Bundle savedInstanceState) {
+        if (savedInstanceState.containsKey(ARG_REST_RESPONSE)) {
+            mFollowersWPCOM = (FollowersModel) savedInstanceState.getSerializable(ARG_REST_RESPONSE);
+        }
+        if (savedInstanceState.containsKey(ARG_REST_RESPONSE_FOLLOWERS_EMAIL)) {
+            mFollowersEmail = (FollowersModel) savedInstanceState.getSerializable(ARG_REST_RESPONSE_FOLLOWERS_EMAIL);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.FollowersWPCOMUdated event) {
+        if (!shouldUpdateFragmentOnUpdateEvent(event)) {
+            return;
+        }
+
+        mFollowersWPCOM = event.mFollowers;
+        updateUI();
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.FollowersEmailUdated event) {
+        if (!shouldUpdateFragmentOnUpdateEvent(event)) {
+            return;
+        }
+
+        mFollowersEmail = event.mFollowers;
+        updateUI();
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.SectionUpdateError event) {
+        if (!shouldUpdateFragmentOnErrorEvent(event)) {
+            return;
+        }
+
+        mFollowersWPCOM = null;
+        mFollowersEmail = null;
+        showErrorUI(event.mError);
     }
 
     @Override
@@ -106,21 +144,16 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
             return;
         }
 
-        mTopPagerContainer.setVisibility(View.VISIBLE);
-        mTotalsLabel.setVisibility(View.VISIBLE);
-
-        if (mDatamodels == null) {
+        if (!hasDataAvailable()) {
             showHideNoResultsUI(true);
             mTotalsLabel.setText(getTotalFollowersLabel(0));
             return;
         }
 
-        if (isErrorResponse()) {
-            showErrorUI();
-            return;
-        }
+        mTotalsLabel.setVisibility(View.VISIBLE);
 
-        final FollowersModel followersModel = (FollowersModel) mDatamodels[mTopPagerSelectedButtonIndex];
+        final FollowersModel followersModel = getCurrentDataModel();
+
         if (followersModel != null && followersModel.getFollowers() != null &&
                 followersModel.getFollowers().size() > 0) {
             ArrayAdapter adapter = new DotComFollowerAdapter(getActivity(), followersModel.getFollowers());
@@ -156,9 +189,9 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
                             @Override
                             public void onClick(View v) {
                                 setNavigationButtonsEnabled(false);
-                                mMoreDataListener.onMoreDataRequested(
-                                        getSectionsToUpdate()[mTopPagerSelectedButtonIndex],
-                                        followersModel.getPage() - 1
+                                refreshStats(
+                                        followersModel.getPage() - 1,
+                                        new StatsService.StatsEndpointsEnum[]{sectionsToUpdate()[mTopPagerSelectedButtonIndex]}
                                 );
                             }
                         };
@@ -176,9 +209,9 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
                             @Override
                             public void onClick(View v) {
                                 setNavigationButtonsEnabled(false);
-                                mMoreDataListener.onMoreDataRequested(
-                                        getSectionsToUpdate()[mTopPagerSelectedButtonIndex],
-                                        followersModel.getPage() + 1
+                                refreshStats(
+                                        followersModel.getPage() + 1,
+                                        new StatsService.StatsEndpointsEnum[]{sectionsToUpdate()[mTopPagerSelectedButtonIndex]}
                                 );
                             }
                         };
@@ -187,7 +220,7 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
                     }
 
                     // Change the total number of followers label by adding the current paging info
-                    int startIndex = followersModel.getPage() * StatsViewAllActivity.MAX_RESULTS_PER_PAGE - StatsViewAllActivity.MAX_RESULTS_PER_PAGE + 1;
+                    int startIndex = followersModel.getPage() * StatsService.MAX_RESULTS_REQUESTED_PER_PAGE - StatsService.MAX_RESULTS_REQUESTED_PER_PAGE + 1;
                     int endIndex = startIndex + followersModel.getFollowers().size() - 1;
                     String pagedLabel  = getString(
                             mTopPagerSelectedButtonIndex == 0 ? R.string.stats_followers_total_wpcom_paged : R.string.stats_followers_total_email_paged,
@@ -207,6 +240,13 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
             mBottomPaginationContainer.setVisibility(View.GONE);
             mTotalsLabel.setText(getTotalFollowersLabel(0));
         }
+
+        // Always visible. Even if the current tab is empty, otherwise the user can't switch tab
+        mTopPagerContainer.setVisibility(View.VISIBLE);
+    }
+
+    private FollowersModel getCurrentDataModel() {
+        return mTopPagerSelectedButtonIndex == 0 ? mFollowersWPCOM : mFollowersEmail;
     }
 
     private void setNavigationBackButtonsVisibility(boolean visible) {
@@ -228,21 +268,25 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
 
     @Override
     protected boolean isViewAllOptionAvailable() {
-        if (isDataEmpty()) {
+        if (!hasDataAvailable()) {
             return false;
         }
-        FollowersModel followersModel = (FollowersModel) mDatamodels[mTopPagerSelectedButtonIndex];
+        FollowersModel followersModel = getCurrentDataModel();
         return !(followersModel == null || followersModel.getFollowers() == null
                 || followersModel.getFollowers().size() < MAX_NUM_OF_ITEMS_DISPLAYED_IN_LIST);
 
     }
 
     private String getTotalFollowersLabel(int total) {
-        if ( mTopPagerSelectedButtonIndex == 0 ) {
-            return getString(R.string.stats_followers_total_wpcom, FormatUtils.formatDecimal(total));
+        final String totalFollowersLabel;
+
+        if (mTopPagerSelectedButtonIndex == 0) {
+            totalFollowersLabel = getString(R.string.stats_followers_total_wpcom);
+        } else {
+            totalFollowersLabel = getString(R.string.stats_followers_total_email);
         }
 
-        return  getString(R.string.stats_followers_total_email, FormatUtils.formatDecimal(total));
+        return String.format(totalFollowersLabel, FormatUtils.formatDecimal(total));
     }
 
     @Override
@@ -325,7 +369,12 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
             }
 
             // since date
-            holder.totalsTextView.setText(getSinceLabel(currentRowData.getDateSubscribed()));
+            holder.totalsTextView.setText(
+                    StatsUtils.getSinceLabel(
+                            context,
+                            currentRowData.getDateSubscribed()
+                    )
+            );
 
             // Avatar
             holder.networkImageView.setImageUrl(
@@ -350,104 +399,7 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
             return rowView;
         }
 
-        private int roundUp(double num, double divisor) {
-            double unrounded = num / divisor;
-            return (int) (unrounded + 0.5);
-        }
 
-        private String getSinceLabel(String dataSubscribed) {
-
-            Date currentDateTime = new Date();
-
-            try {
-                SimpleDateFormat from = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ");
-                Date date = from.parse(dataSubscribed);
-
-                // See http://momentjs.com/docs/#/displaying/fromnow/
-                long currentDifference = Math.abs(
-                        StatsUtils.getDateDiff(date, currentDateTime, TimeUnit.SECONDS)
-                );
-
-                if (currentDifference <= 45 ) {
-                    return getString(R.string.stats_followers_seconds_ago);
-                }
-                if (currentDifference < 90 ) {
-                    return getString(R.string.stats_followers_a_minute_ago);
-                }
-
-                // 90 seconds to 45 minutes
-                if (currentDifference <= 2700 ) {
-                    long minutes = this.roundUp(currentDifference, 60);
-                    return getString(
-                            R.string.stats_followers_minutes,
-                            minutes
-                    );
-                }
-
-                // 45 to 90 minutes
-                if (currentDifference <= 5400 ) {
-                    return getString(R.string.stats_followers_an_hour_ago);
-                }
-
-                // 90 minutes to 22 hours
-                if (currentDifference <= 79200 ) {
-                    long hours = this.roundUp(currentDifference, 60*60);
-                    return getString(
-                            R.string.stats_followers_hours,
-                            hours
-                    );
-                }
-
-                // 22 to 36 hours
-                if (currentDifference <= 129600 ) {
-                    return getString(R.string.stats_followers_a_day);
-                }
-
-                // 36 hours to 25 days
-                // 86400 secs in a day -  2160000 secs in 25 days
-                if (currentDifference <= 2160000 ) {
-                    long days = this.roundUp(currentDifference, 86400);
-                    return getString(
-                            R.string.stats_followers_days,
-                            days
-                    );
-                }
-
-                // 25 to 45 days
-                // 3888000 secs in 45 days
-                if (currentDifference <= 3888000 ) {
-                    return getString(R.string.stats_followers_a_month);
-                }
-
-                // 45 to 345 days
-                // 2678400 secs in a month - 29808000 secs in 345 days
-                if (currentDifference <= 29808000 ) {
-                    long months = this.roundUp(currentDifference, 2678400);
-                    return getString(
-                            R.string.stats_followers_months,
-                            months
-                    );
-                }
-
-                // 345 to 547 days (1.5 years)
-                if (currentDifference <= 47260800 ) {
-                    return getString(R.string.stats_followers_a_year);
-                }
-
-                // 548 days+
-                // 31536000 secs in a year
-                long years = this.roundUp(currentDifference, 31536000);
-                return getString(
-                        R.string.stats_followers_years,
-                        years
-                );
-
-            } catch (ParseException e) {
-                AppLog.e(AppLog.T.STATS, e);
-            }
-
-            return "";
-        }
     }
 
     private static String normalizeAndRemoveScheme(String url) {
@@ -484,7 +436,7 @@ public class StatsFollowersFragment extends StatsAbstractListFragment {
     }
 
     @Override
-    protected StatsService.StatsEndpointsEnum[] getSectionsToUpdate() {
+    protected StatsService.StatsEndpointsEnum[] sectionsToUpdate() {
         return new StatsService.StatsEndpointsEnum[]{
                 StatsService.StatsEndpointsEnum.FOLLOWERS_WPCOM, StatsService.StatsEndpointsEnum.FOLLOWERS_EMAIL
         };

@@ -5,14 +5,13 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.support.v7.app.ActionBar;
-import android.support.v7.app.ActionBarActivity;
+import android.support.v7.app.AppCompatActivity;
 import android.util.SparseBooleanArray;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
-import android.view.View;
-import android.widget.AdapterView;
 import android.widget.ListView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.wordpress.android.R;
@@ -29,6 +28,7 @@ import org.wordpress.android.util.helpers.SwipeToRefreshHelper;
 import org.wordpress.android.util.helpers.SwipeToRefreshHelper.RefreshListener;
 import org.wordpress.android.util.widgets.CustomSwipeRefreshLayout;
 import org.xmlpull.v1.XmlPullParserException;
+import org.xmlrpc.android.ApiHelper.Method;
 import org.xmlrpc.android.XMLRPCClientInterface;
 import org.xmlrpc.android.XMLRPCException;
 import org.xmlrpc.android.XMLRPCFactory;
@@ -39,11 +39,12 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 
-public class SelectCategoriesActivity extends ActionBarActivity {
+public class SelectCategoriesActivity extends AppCompatActivity {
     String finalResult = "";
     private final Handler mHandler = new Handler();
     private Blog blog;
     private ListView mListView;
+    private TextView mEmptyView;
     private ListScrollPositionManager mListScrollPositionManager;
     private SwipeToRefreshHelper mSwipeToRefreshHelper;
     private HashSet<String> mSelectedCategories;
@@ -61,7 +62,6 @@ public class SelectCategoriesActivity extends ActionBarActivity {
 
         ActionBar actionBar = getSupportActionBar();
         if (actionBar != null) {
-            actionBar.setElevation(0.0f);
             actionBar.setHomeButtonEnabled(true);
             actionBar.setDisplayHomeAsUpEnabled(true);
         }
@@ -71,19 +71,8 @@ public class SelectCategoriesActivity extends ActionBarActivity {
         mListView.setChoiceMode(ListView.CHOICE_MODE_MULTIPLE);
         mListView.setItemsCanFocus(false);
 
-        mListView.setOnItemClickListener(new AdapterView.OnItemClickListener(){
-            @Override
-            public void onItemClick(AdapterView<?> arg0, View arg1, int position, long arg3) {
-                if (getCheckedItemCount(mListView) > 1) {
-                    boolean uncategorizedNeedToBeSelected = false;
-                    for (int i = 0; i < mCategoryLevels.size(); i++) {
-                        if (mCategoryLevels.get(i).getName().equalsIgnoreCase("uncategorized")) {
-                            mListView.setItemChecked(i, uncategorizedNeedToBeSelected);
-                        }
-                    }
-                }
-            }
-        });
+        mEmptyView = (TextView) findViewById(R.id.empty_view);
+        mListView.setEmptyView(mEmptyView);
 
         mSelectedCategories = new HashSet<String>();
 
@@ -118,9 +107,21 @@ public class SelectCategoriesActivity extends ActionBarActivity {
 
         populateCategoryList();
 
-        // Refresh blog list if network is available and activity really starts
-        if (NetworkUtils.isNetworkAvailable(this) && savedInstanceState == null) {
-            refreshCategories();
+        if (NetworkUtils.isNetworkAvailable(this)) {
+            mEmptyView.setText(R.string.empty_list_default);
+            if (isCategoryListEmpty()) {
+                refreshCategories();
+            }
+        } else {
+            mEmptyView.setText(R.string.no_network_title);
+        }
+    }
+
+    private boolean isCategoryListEmpty() {
+        if (mListView.getAdapter() != null) {
+            return mListView.getAdapter().isEmpty();
+        } else {
+            return true;
         }
     }
 
@@ -176,7 +177,7 @@ public class SelectCategoriesActivity extends ActionBarActivity {
         mClient = XMLRPCFactory.instantiate(blog.getUri(), blog.getHttpuser(), blog.getHttppassword());
         boolean success = false;
         try {
-            result = (Object[]) mClient.call("wp.getCategories", params);
+            result = (Object[]) mClient.call(Method.GET_CATEGORIES, params);
             success = true;
         } catch (XMLRPCException e) {
             AppLog.e(AppLog.T.POSTS, e);
@@ -225,7 +226,7 @@ public class SelectCategoriesActivity extends ActionBarActivity {
 
         Object result = null;
         try {
-            result = mClient.call("wp.newCategory", params);
+            result = mClient.call(Method.NEW_CATEGORY, params);
         } catch (XMLRPCException e) {
             AppLog.e(AppLog.T.POSTS, e);
         } catch (IOException e) {
@@ -312,11 +313,13 @@ public class SelectCategoriesActivity extends ActionBarActivity {
     public boolean onOptionsItemSelected(final MenuItem item) {
         int itemId = item.getItemId();
         if (itemId == R.id.menu_new_category) {
-            Bundle bundle = new Bundle();
-            bundle.putInt("id", blog.getLocalTableBlogId());
-            Intent i = new Intent(SelectCategoriesActivity.this, AddCategoryActivity.class);
-            i.putExtras(bundle);
-            startActivityForResult(i, 0);
+            if (NetworkUtils.checkConnection(this)) {
+                Bundle bundle = new Bundle();
+                bundle.putInt("id", blog.getLocalTableBlogId());
+                Intent i = new Intent(SelectCategoriesActivity.this, AddCategoryActivity.class);
+                i.putExtras(bundle);
+                startActivityForResult(i, 0);
+            }
             return true;
         } else if (itemId == android.R.id.home) {
             saveAndFinish();
@@ -332,7 +335,7 @@ public class SelectCategoriesActivity extends ActionBarActivity {
         Object[] params = { blog.getRemoteBlogId(), blog.getUsername(), blog.getPassword(), "category", category_id };
         mClient = XMLRPCFactory.instantiate(blog.getUri(), blog.getHttpuser(), blog.getHttppassword());
         try {
-            result = (Map<?, ?>) mClient.call("wp.getTerm", params);
+            result = (Map<?, ?>) mClient.call(Method.GET_TERM, params);
         } catch (XMLRPCException e) {
             AppLog.e(AppLog.T.POSTS, e);
         } catch (IOException e) {

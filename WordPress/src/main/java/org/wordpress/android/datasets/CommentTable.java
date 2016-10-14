@@ -10,6 +10,7 @@ import org.wordpress.android.WordPress;
 import org.wordpress.android.WordPressDB;
 import org.wordpress.android.models.Comment;
 import org.wordpress.android.models.CommentList;
+import org.wordpress.android.models.CommentStatus;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.SqlUtils;
 import org.wordpress.android.util.StringUtils;
@@ -19,7 +20,7 @@ import org.wordpress.android.util.StringUtils;
  * and missed a few important fields
  */
 public class CommentTable {
-    private static final String COMMENTS_TABLE = "comments";
+    public static final String COMMENTS_TABLE = "comments";
 
     public static void createTables(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS " + COMMENTS_TABLE + " ("
@@ -64,7 +65,7 @@ public class CommentTable {
         int numDeleted = 0;
 
         // get rid of comments on blogs that don't exist or are hidden
-        String sql = " blog_id NOT IN (SELECT DISTINCT id FROM " + WordPressDB.SETTINGS_TABLE
+        String sql = " blog_id NOT IN (SELECT DISTINCT id FROM " + WordPressDB.BLOGS_TABLE
                    + " WHERE isHidden = 0)";
         numDeleted += db.delete(COMMENTS_TABLE, sql, null);
 
@@ -81,7 +82,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury 11/15/13 - add a single comment - will update existing comment with same IDs
+     * add a single comment - will update existing comment with same IDs
      * @param localBlogId - unique id in account table for the blog the comment is from
      * @param comment - comment object to store
      */
@@ -95,7 +96,7 @@ public class CommentTable {
         values.put("comment_id",        comment.commentID);
         values.put("author_name",       comment.getAuthorName());
         values.put("author_url",        comment.getAuthorUrl());
-        values.put("comment",           comment.getCommentText());
+        values.put("comment",           SqlUtils.maxSQLiteText(comment.getCommentText()));
         values.put("status",            comment.getStatus());
         values.put("author_email",      comment.getAuthorEmail());
         values.put("post_title",        comment.getPostTitle());
@@ -106,7 +107,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury 11/11/13 - retrieve a single comment
+     * retrieve a single comment
      * @param localBlogId - unique id in account table for the blog the comment is from
      * @param commentId - commentId of the actual comment
      * @return Comment if found, null otherwise
@@ -115,8 +116,9 @@ public class CommentTable {
         String[] args = {Integer.toString(localBlogId), Long.toString(commentId)};
         Cursor c = getReadableDb().rawQuery("SELECT * FROM " + COMMENTS_TABLE + " WHERE blog_id=? AND comment_id=?", args);
         try {
-            if (!c.moveToFirst())
+            if (!c.moveToFirst()) {
                 return null;
+            }
             return getCommentFromCursor(c);
         } finally {
             SqlUtils.closeCursor(c);
@@ -124,7 +126,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury - get all comments for a blog
+     * get all comments for a blog
      * @param localBlogId - unique id in account table for this blog
      * @return list of comments for this blog
      */
@@ -132,14 +134,13 @@ public class CommentTable {
         CommentList comments = new CommentList();
 
         String[] args = {Integer.toString(localBlogId)};
-        Cursor c = getReadableDb().rawQuery("SELECT * FROM " + COMMENTS_TABLE + " WHERE blog_id=? ORDER BY published DESC", args);
+        Cursor c = getReadableDb().rawQuery(
+                "SELECT * FROM " + COMMENTS_TABLE + " WHERE blog_id=? ORDER BY published DESC", args);
 
         try {
-            if (c.moveToFirst()) {
-                do {
-                    Comment comment = getCommentFromCursor(c);
-                    comments.add(comment);
-                } while (c.moveToNext());
+            while (c.moveToNext()) {
+                Comment comment = getCommentFromCursor(c);
+                comments.add(comment);
             }
 
             return comments;
@@ -149,16 +150,83 @@ public class CommentTable {
     }
 
     /**
-    * nbradbury - delete all comments for a blog
-    * @param localBlogId - unique id in account table for this blog
-    * @return number of comments deleted
+     * get comments for a blog that have a specific status
+     * @param localBlogId - unique id in account table for this blog
+     * @param filter - status to filter comments by
+     * @return list of comments for this blog
+     */
+    public static CommentList getCommentsForBlogWithFilter(int localBlogId, CommentStatus filter) {
+        CommentList comments = new CommentList();
+        Cursor c;
+
+        //aggregating 'all' to include approved and unapproved comments
+        if (CommentStatus.UNKNOWN.equals(filter)){
+            //we need to get the filter values for both XMLrpc and REST api as in the case of a migration where existing
+            // data is present on a device, we still need to be able to filter both values
+            String[] args = {Integer.toString(localBlogId),
+                    CommentStatus.toString(CommentStatus.APPROVED),
+                    CommentStatus.toString(CommentStatus.UNAPPROVED),
+                    CommentStatus.toRESTString(CommentStatus.APPROVED),
+                    CommentStatus.toRESTString(CommentStatus.UNAPPROVED)};
+            c = getReadableDb().rawQuery(
+                    "SELECT * FROM " + COMMENTS_TABLE + " WHERE blog_id=? AND (status=? OR status=? OR status=? OR status=?)  ORDER BY published DESC", args);
+
+        } else {
+            //we need to get the filter values for both XMLrpc and REST api as in the case of a migration where existing
+            // data is present on a device, we still need to be able to filter both values
+            String[] args = {Integer.toString(localBlogId), CommentStatus.toString(filter), CommentStatus.toRESTString(filter)};
+            c = getReadableDb().rawQuery(
+                    "SELECT * FROM " + COMMENTS_TABLE + " WHERE blog_id=? AND (status=? OR status=?)  ORDER BY published DESC", args);
+        }
+
+        try {
+            while (c.moveToNext()) {
+                Comment comment = getCommentFromCursor(c);
+                comments.add(comment);
+            }
+
+            return comments;
+        } finally {
+            SqlUtils.closeCursor(c);
+        }
+    }
+
+    /**
+     * delete all comments for a blog
+     * @param localBlogId - unique id in account table for this blog
+     * @return number of comments deleted
      */
     public static int deleteCommentsForBlog(int localBlogId) {
         return getWritableDb().delete(COMMENTS_TABLE, "blog_id=?", new String[]{Integer.toString(localBlogId)});
     }
 
     /**
-     * nbradbury - saves comments for passed blog to local db, overwriting existing ones if necessary
+     * delete comments for a blog that match a specific status
+     * @param localBlogId - unique id in account table for this blog
+     * @param filter - status to use to filter the query
+     * @return number of comments deleted
+     */
+    public static int deleteCommentsForBlogWithFilter(int localBlogId, CommentStatus filter) {
+        if (CommentStatus.UNKNOWN.equals(filter)){
+            //we need to get the filter values for both XMLrpc and REST api as in the case of a migration where existing
+            // data is present on a device, we still need to be able to filter both values
+            String[] args = {Integer.toString(localBlogId),
+                    CommentStatus.toString(CommentStatus.APPROVED),
+                    CommentStatus.toString(CommentStatus.UNAPPROVED),
+                    CommentStatus.toRESTString(CommentStatus.APPROVED),
+                    CommentStatus.toRESTString(CommentStatus.UNAPPROVED)};
+            return getWritableDb().delete(COMMENTS_TABLE, "blog_id=? AND (status=? OR status=? OR status=? OR status=?)", args);
+
+        } else {
+            //we need to get the filter values for both XMLrpc and REST api as in the case of a migration where existing
+            // data is present on a device, we still need to be able to filter both values
+            String[] args = {Integer.toString(localBlogId), CommentStatus.toString(filter), CommentStatus.toRESTString(filter)};
+            return getWritableDb().delete(COMMENTS_TABLE, "blog_id=? AND (status=? OR status=?)", args);
+        }
+    }
+
+    /**
+     * saves comments for passed blog to local db, overwriting existing ones if necessary
      * @param localBlogId - unique id in account table for this blog
      * @param comments - list of comments to save
      * @return true if saved, false on failure
@@ -190,7 +258,7 @@ public class CommentTable {
                     stmt.bindLong  ( 1, localBlogId);
                     stmt.bindLong  ( 2, comment.postID);
                     stmt.bindLong  ( 3, comment.commentID);
-                    stmt.bindString( 4, comment.getCommentText());
+                    stmt.bindString( 4, SqlUtils.maxSQLiteText(comment.getCommentText()));
                     stmt.bindString( 5, comment.getPublished());
                     stmt.bindString( 6, comment.getStatus());
                     stmt.bindString( 7, comment.getAuthorName());
@@ -214,7 +282,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury - updates the passed comment
+     * updates the passed comment
      * @param localBlogId - unique id in account table for this blog
      * @param comment - comment to update
      */
@@ -224,7 +292,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury - updates the status for the passed comment
+     * updates the status for the passed comment
      * @param localBlogId - unique id in account table for this blog
      * @param commentId - id of comment (returned by api)
      * @param newStatus - status to change to
@@ -234,14 +302,11 @@ public class CommentTable {
         values.put("status", newStatus);
         String[] args = {Integer.toString(localBlogId),
                          Long.toString(commentId)};
-        getWritableDb().update(COMMENTS_TABLE,
-                               values,
-                               "blog_id=? AND comment_id=?",
-                               args);
+        getWritableDb().update(COMMENTS_TABLE, values, "blog_id=? AND comment_id=?", args);
     }
 
     /**
-     * nbradbury - updates the status for the passed list of comments
+     * updates the status for the passed list of comments
      * @param localBlogId - unique id in account table for this blog
      * @param comments - list of comments to update
      * @param newStatus - status to change to
@@ -261,7 +326,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury - updates the post title for the passed comment
+     * updates the post title for the passed comment
      * @param localBlogId - unique id in account table for this blog
      * @param postTitle - title to update to
      * @return true if title updated
@@ -276,7 +341,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury 11/12/13 - delete a single comment
+     * delete a single comment
      * @param localBlogId - unique id in account table for this blog
      * @param commentId - commentId of the actual comment
      * @return true if comment deleted, false otherwise
@@ -289,7 +354,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury - delete a list of comments
+     * delete a list of comments
      * @param localBlogId - unique id in account table for this blog
      * @param comments - list of comments to delete
      */
@@ -308,7 +373,7 @@ public class CommentTable {
     }
 
     /**
-     * nbradbury - returns the number of unmoderated comments for a specific blog
+     * returns the number of unmoderated comments for a specific blog
      * @param localBlogId - unique id in account table for this blog
      */
     public static int getUnmoderatedCommentCount(int localBlogId) {
@@ -341,5 +406,14 @@ public class CommentTable {
                 authorUrl,
                 authorEmail,
                 profileImageUrl);
+    }
+
+
+    /**
+     * Delete big comments (Maximum 512 * 1024 = 524288) (fix #2855)
+     * @return number of deleted comments
+     */
+    public static int deleteBigComments(SQLiteDatabase db) {
+        return db.delete(COMMENTS_TABLE, "LENGTH(comment) >= 524288", null);
     }
 }

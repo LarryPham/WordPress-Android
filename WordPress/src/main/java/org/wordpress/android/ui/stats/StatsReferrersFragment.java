@@ -1,6 +1,8 @@
 package org.wordpress.android.ui.stats;
 
-import android.content.Context;
+import android.app.Activity;
+import android.os.Bundle;
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -8,6 +10,7 @@ import android.widget.BaseExpandableListAdapter;
 
 import org.wordpress.android.R;
 import org.wordpress.android.ui.stats.models.ReferrerGroupModel;
+import org.wordpress.android.ui.stats.models.ReferrerResultModel;
 import org.wordpress.android.ui.stats.models.ReferrersModel;
 import org.wordpress.android.ui.stats.models.SingleItemModel;
 import org.wordpress.android.ui.stats.service.StatsService;
@@ -15,19 +18,57 @@ import org.wordpress.android.util.FormatUtils;
 import org.wordpress.android.util.GravatarUtils;
 import org.wordpress.android.widgets.WPNetworkImageView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class StatsReferrersFragment extends StatsAbstractListFragment {
     public static final String TAG = StatsReferrersFragment.class.getSimpleName();
 
+    private ReferrersModel mReferrers;
+
     @Override
-    protected void updateUI() {
-        if (!isAdded()) {
+    protected boolean hasDataAvailable() {
+        return mReferrers != null;
+    }
+    @Override
+    protected void saveStatsData(Bundle outState) {
+        if (hasDataAvailable()) {
+            outState.putSerializable(ARG_REST_RESPONSE, mReferrers);
+        }
+    }
+    @Override
+    protected void restoreStatsData(Bundle savedInstanceState) {
+        if (savedInstanceState.containsKey(ARG_REST_RESPONSE)) {
+            mReferrers = (ReferrersModel) savedInstanceState.getSerializable(ARG_REST_RESPONSE);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.ReferrersUpdated event) {
+        if (!shouldUpdateFragmentOnUpdateEvent(event)) {
             return;
         }
 
-        if (isErrorResponse()) {
-            showErrorUI();
+        mGroupIdToExpandedMap.clear();
+        mReferrers = event.mReferrers;
+
+        updateUI();
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.SectionUpdateError event) {
+        if (!shouldUpdateFragmentOnErrorEvent(event)) {
+            return;
+        }
+
+        mReferrers = null;
+        mGroupIdToExpandedMap.clear();
+        showErrorUI(event.mError);
+    }
+
+    @Override
+    protected void updateUI() {
+        if (!isAdded()) {
             return;
         }
 
@@ -41,16 +82,16 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
     }
 
     private boolean hasReferrers() {
-        return !isDataEmpty()
-                && ((ReferrersModel) mDatamodels[0]).getGroups() != null
-                && ((ReferrersModel) mDatamodels[0]).getGroups().size() > 0;
+        return mReferrers != null
+                && mReferrers.getGroups() != null
+                && mReferrers.getGroups().size() > 0;
     }
 
     private List<ReferrerGroupModel> getReferrersGroups() {
         if (!hasReferrers()) {
-            return null;
+            return new ArrayList<ReferrerGroupModel>(0);
         }
-        return ((ReferrersModel) mDatamodels[0]).getGroups();
+        return mReferrers.getGroups();
     }
 
     @Override
@@ -64,7 +105,7 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
     }
 
     @Override
-    protected StatsService.StatsEndpointsEnum[] getSectionsToUpdate() {
+    protected StatsService.StatsEndpointsEnum[] sectionsToUpdate() {
         return new StatsService.StatsEndpointsEnum[]{
                 StatsService.StatsEndpointsEnum.REFERRERS
         };
@@ -89,18 +130,62 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
 
     private class MyExpandableListAdapter extends BaseExpandableListAdapter {
         public final LayoutInflater inflater;
+        public final Activity act;
         private final List<ReferrerGroupModel> groups;
+        private final List<List<MyChildModel>> children;
 
-        public MyExpandableListAdapter(Context context, List<ReferrerGroupModel> groups) {
+        public MyExpandableListAdapter(Activity act, List<ReferrerGroupModel> groups) {
             this.groups = groups;
-            this.inflater = LayoutInflater.from(context);
+            this.inflater = LayoutInflater.from(act);
+            this.act = act;
+
+            // The code below flattens the 3-levels tree of children to a 2-levels structure
+            // that will be used later to populate the UI
+            this.children = new ArrayList<>(groups.size());
+            // pre-populate the structure with null values
+            for (int i = 0; i < groups.size(); i++) {
+                this.children.add(null);
+            }
+
+            for (int i = 0; i < groups.size(); i++) {
+                ReferrerGroupModel currentGroup = groups.get(i);
+                List<MyChildModel> currentGroupChildren = new ArrayList<>();
+                List<ReferrerResultModel> childrenOfLevelOne = currentGroup.getResults();
+                if (childrenOfLevelOne != null) {
+                    // Children at first level could be a single item or another tree
+                    // Levels 2 children are skipped in the UI.
+                    for (ReferrerResultModel singleLevelOneChild : childrenOfLevelOne) {
+                        // Use all the info given in the first level child.
+                        MyChildModel myChild = new MyChildModel();
+                        myChild.icon = singleLevelOneChild.getIcon();
+                        myChild.url = singleLevelOneChild.getUrl();
+                        myChild.name = singleLevelOneChild.getName();
+                        myChild.views = singleLevelOneChild.getViews();
+
+                        // read the URL from the first second-level child if available.
+                        List<SingleItemModel> secondLevelChildren = singleLevelOneChild.getChildren();
+                        if (secondLevelChildren != null && secondLevelChildren.size() > 0) {
+                            SingleItemModel firstThirdLevelChild = secondLevelChildren.get(0);
+                            myChild.url = firstThirdLevelChild.getUrl();
+                        }
+                        currentGroupChildren.add(myChild);
+                    }
+                }
+                this.children.set(i, currentGroupChildren);
+            }
+        }
+
+        private final class MyChildModel {
+            String name;
+            int views;
+            String url;
+            String icon;
         }
 
         @Override
         public Object getChild(int groupPosition, int childPosition) {
-            ReferrerGroupModel currentGroup = groups.get(groupPosition);
-            List<SingleItemModel> results = currentGroup.getResults();
-            return results.get(childPosition);
+            List<MyChildModel> currentGroupChildren = children.get(groupPosition);
+            return currentGroupChildren.get(childPosition);
         }
 
         @Override
@@ -112,7 +197,7 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
         public View getChildView(int groupPosition, final int childPosition,
                                  boolean isLastChild, View convertView, ViewGroup parent) {
 
-            final SingleItemModel children = (SingleItemModel) getChild(groupPosition, childPosition);
+            final MyChildModel currentChild = (MyChildModel) getChild(groupPosition, childPosition);
 
             if (convertView == null) {
                 convertView = inflater.inflate(R.layout.stats_list_cell, parent, false);
@@ -123,18 +208,24 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
 
             final StatsViewHolder holder = (StatsViewHolder) convertView.getTag();
 
-            String name = children.getTitle();
-            int total = children.getTotals();
+            String name = currentChild.name;
+            int views = currentChild.views;
 
-            // The link icon
-            holder.showLinkIcon();
+            holder.chevronImageView.setVisibility(View.GONE);
+            holder.linkImageView.setVisibility(TextUtils.isEmpty(currentChild.url) ? View.GONE : View.VISIBLE);
+            holder.setEntryTextOrLink(currentChild.url, name);
 
-            // name, url
-            holder.setEntryTextOrLink(children.getUrl(), name);
             // totals
-            holder.totalsTextView.setText(FormatUtils.formatDecimal(total));
+            holder.totalsTextView.setText(FormatUtils.formatDecimal(views));
 
+            // site icon
             holder.networkImageView.setVisibility(View.GONE);
+            if (!TextUtils.isEmpty(currentChild.icon)) {
+                holder.networkImageView.setImageUrl(
+                        GravatarUtils.fixGravatarUrl(currentChild.icon, mResourceVars.headerAvatarSizePx),
+                        WPNetworkImageView.ImageType.GONE_UNTIL_AVAILABLE);
+            }
+
             // no more btm
             holder.imgMore.setVisibility(View.GONE);
 
@@ -143,12 +234,11 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
 
         @Override
         public int getChildrenCount(int groupPosition) {
-            ReferrerGroupModel currentGroup = groups.get(groupPosition);
-            List<SingleItemModel> referrals = currentGroup.getResults();
-            if (referrals == null) {
+            List<MyChildModel> currentGroupChildren = children.get(groupPosition);
+            if (currentGroupChildren == null) {
                 return 0;
             } else {
-                return referrals.size();
+                return currentGroupChildren.size();
             }
         }
 
@@ -176,14 +266,12 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
             if (convertView == null) {
                 convertView = inflater.inflate(R.layout.stats_list_cell, parent, false);
                 holder = new StatsViewHolder(convertView);
-                holder.networkImageView.setErrorImageResId(R.drawable.stats_icon_default_site_avatar);
-                holder.networkImageView.setDefaultImageResId(R.drawable.stats_icon_default_site_avatar);
                 convertView.setTag(holder);
             } else {
                 holder = (StatsViewHolder) convertView.getTag();
             }
 
-            ReferrerGroupModel group = (ReferrerGroupModel) getGroup(groupPosition);
+            final ReferrerGroupModel group = (ReferrerGroupModel) getGroup(groupPosition);
 
             String name = group.getName();
             int total = group.getTotal();
@@ -200,15 +288,34 @@ public class StatsReferrersFragment extends StatsAbstractListFragment {
             // totals
             holder.totalsTextView.setText(FormatUtils.formatDecimal(total));
 
-            holder.networkImageView.setImageUrl(
-                    GravatarUtils.fixGravatarUrl(icon, mResourceVars.headerAvatarSizePx),
-                    WPNetworkImageView.ImageType.BLAVATAR);
-            holder.networkImageView.setVisibility(View.VISIBLE);
+            // Site icon
+            holder.networkImageView.setVisibility(View.GONE);
+            if (!TextUtils.isEmpty(icon)) {
+                holder.networkImageView.setImageUrl(
+                        GravatarUtils.fixGravatarUrl(icon, mResourceVars.headerAvatarSizePx),
+                        WPNetworkImageView.ImageType.GONE_UNTIL_AVAILABLE);
+            }
 
             if (children == 0) {
                 holder.showLinkIcon();
             } else {
                 holder.showChevronIcon();
+            }
+
+            // Setup the spam button
+            if (ReferrerSpamHelper.isSpamActionAvailable(group)) {
+                holder.imgMore.setVisibility(View.VISIBLE);
+                holder.imgMore.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        ReferrerSpamHelper rp = new ReferrerSpamHelper(act);
+                        rp.showPopup(holder.imgMore, group);
+                    }
+                });
+
+            } else {
+                holder.imgMore.setVisibility(View.GONE);
+                holder.imgMore.setClickable(false);
             }
 
             return convertView;

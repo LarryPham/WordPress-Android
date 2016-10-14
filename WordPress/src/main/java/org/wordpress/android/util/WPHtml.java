@@ -35,6 +35,7 @@ import android.text.style.AbsoluteSizeSpan;
 import android.text.style.AlignmentSpan;
 import android.text.style.CharacterStyle;
 import android.text.style.ForegroundColorSpan;
+import android.text.style.ImageSpan;
 import android.text.style.ParagraphStyle;
 import android.text.style.QuoteSpan;
 import android.text.style.RelativeSizeSpan;
@@ -68,6 +69,7 @@ import org.xml.sax.XMLReader;
 import java.io.IOException;
 import java.io.StringReader;
 import java.util.HashMap;
+import java.util.Locale;
 
 /**
  * This class processes HTML strings into displayable styled text. Not all HTML
@@ -448,23 +450,21 @@ public class WPHtml {
             String localBlogID = imageSpan.getMediaFile().getBlogId();
             Blog currentBlog = WordPress.wpDB.instantiateBlogByLocalId(Integer.parseInt(localBlogID));
             // If it's not a gif and blog don't keep original size, there is a chance we need to resize
-            if (currentBlog != null && !mediaFile.getMimeType().equals("image/gif") &&
-                !currentBlog.getMaxImageWidth().equals("Original Size")) {
-                int maxImageWidth = Integer.parseInt(currentBlog.getMaxImageWidth());
-                // use the correct resize settings.
-                width = Math.min(width, maxImageWidth);
+            if (currentBlog != null && !mediaFile.getMimeType().equals("image/gif")
+                    && MediaUtils.getImageWidthSettingFromString(currentBlog.getMaxImageWidth()) != Integer.MAX_VALUE) {
+                width = MediaUtils.getMaximumImageWidth(width, currentBlog.getMaxImageWidth());
                 // Use inline CSS on self-hosted blogs to enforce picture resize settings
                 if (!currentBlog.isDotcomFlag()) {
-                    inlineCSS = String.format(" style=\"width:%dpx;max-width:%dpx;\" ", width, width);
+                    inlineCSS = String.format(Locale.US, " style=\"width:%dpx;max-width:%dpx;\" ", width, width);
                 }
             }
-
             content = content + "<a href=\"" + url + "\"><img" + inlineCSS + "title=\"" + title + "\" "
                     + alignmentCSS + "alt=\"image\" src=\"" + url + "?w=" + width +"\" /></a>";
 
             if (!caption.equals("")) {
-                content = String.format("[caption id=\"\" align=\"%s\" width=\"%d\" caption=\"%s\"]%s[/caption]",
-                        alignment, width, TextUtils.htmlEncode(caption), content);
+                content = String.format(Locale.US,
+                        "[caption id=\"\" align=\"%s\" width=\"%d\"]%s%s[/caption]",
+                        alignment, width, content, TextUtils.htmlEncode(caption));
             }
         }
 
@@ -525,8 +525,8 @@ class HtmlToSpannedConverter implements ContentHandler {
     private String mysteryTagContent;
     private boolean mysteryTagFound;
     private int mMaxImageWidth;
-    private static Context ctx;
-    private static Post post;
+    private Context mContext;
+    private Post mPost;
 
     private String mysteryTagName;
 
@@ -539,8 +539,8 @@ class HtmlToSpannedConverter implements ContentHandler {
         mReader = parser;
         mysteryTagContent = "";
         mysteryTagName = null;
-        ctx = context;
-        post = p;
+        mContext = context;
+        mPost = p;
         mMaxImageWidth = maxImageWidth;
     }
 
@@ -587,8 +587,8 @@ class HtmlToSpannedConverter implements ContentHandler {
 
     private void handleStartTag(String tag, Attributes attributes) {
         if (!mysteryTagFound) {
-            if (post != null) {
-                if (!post.isLocalDraft()) {
+            if (mPost != null) {
+                if (!mPost.isLocalDraft()) {
                     if (tag.equalsIgnoreCase("img"))
                         startImg(mSpannableStringBuilder, attributes,
                                 mImageGetter);
@@ -662,8 +662,8 @@ class HtmlToSpannedConverter implements ContentHandler {
     }
 
     private void handleEndTag(String tag) {
-        if (post != null) {
-            if (!post.isLocalDraft())
+        if (mPost != null) {
+            if (!mPost.isLocalDraft())
                 return;
         }
         if (!mysteryTagFound) {
@@ -796,18 +796,18 @@ class HtmlToSpannedConverter implements ContentHandler {
     }
 
     private void startImg(SpannableStringBuilder text, Attributes attributes, WPHtml.ImageGetter img) {
-        if (ctx == null) return;
+        if (mContext == null) return;
 
         String src = attributes.getValue("android-uri");
 
         Bitmap resizedBitmap = null;
         try {
-            resizedBitmap = ImageUtils.getWPImageSpanThumbnailFromFilePath(ctx, src, mMaxImageWidth);
+            resizedBitmap = ImageUtils.getWPImageSpanThumbnailFromFilePath(mContext, src, mMaxImageWidth);
             if (resizedBitmap == null && src != null) {
                 if (src.contains("video")) {
-                    resizedBitmap = BitmapFactory.decodeResource(ctx.getResources(), R.drawable.media_movieclip);
+                    resizedBitmap = BitmapFactory.decodeResource(mContext.getResources(), org.wordpress.android.editor.R.drawable.media_movieclip);
                 } else {
-                    resizedBitmap = BitmapFactory.decodeResource(ctx.getResources(), R.drawable.media_image_placeholder);
+                    resizedBitmap = BitmapFactory.decodeResource(mContext.getResources(), R.drawable.media_image_placeholder);
                 }
             }
         } catch (OutOfMemoryError e) {
@@ -824,10 +824,10 @@ class HtmlToSpannedConverter implements ContentHandler {
                 return;
             }
 
-            WPImageSpan is = new WPImageSpan(ctx, resizedBitmap, curStream);
+            WPImageSpan is = new WPImageSpan(mContext, resizedBitmap, curStream);
 
             // get the MediaFile data from db
-            MediaFile mf = WordPress.wpDB.getMediaFile(src, post);
+            MediaFile mf = WordPress.wpDB.getMediaFile(src, mPost);
             if (mf != null) {
                 is.setMediaFile(mf);
                 is.setImageSource(curStream);
@@ -838,8 +838,8 @@ class HtmlToSpannedConverter implements ContentHandler {
                 text.setSpan(as, text.getSpanStart(is), text.getSpanEnd(is),
                         Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
-        } else if (post != null) {
-            if (post.isLocalDraft()) {
+        } else if (mPost != null) {
+            if (mPost.isLocalDraft()) {
                 if (attributes != null) {
                     text.append("<img");
                     for (int i = 0; i < attributes.getLength(); i++) {
@@ -852,6 +852,26 @@ class HtmlToSpannedConverter implements ContentHandler {
                     text.append(" />\n");
                 }
             }
+        } else if (src == null) {
+
+            //get regular src value from <img/> tag's src attribute
+            src = attributes.getValue("", "src");
+            Drawable d = null;
+
+            if (img != null) {
+                d = img.getDrawable(src);
+            }
+
+            if (d != null) {
+                int len = text.length();
+                text.append("\uFFFC");
+
+                text.setSpan(new ImageSpan(d, src), len, text.length(),
+                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            } else {
+                // noop - we're not showing a default image here
+            }
+
         }
     }
 

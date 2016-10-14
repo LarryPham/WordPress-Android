@@ -1,11 +1,12 @@
 package org.wordpress.android.ui.prefs;
 
 import android.app.AlertDialog;
+import android.app.Fragment;
+import android.app.FragmentManager;
 import android.content.DialogInterface;
-import android.content.Intent;
 import android.os.Bundle;
 import android.support.v7.app.ActionBar;
-import android.support.v7.app.ActionBarActivity;
+import android.support.v7.app.AppCompatActivity;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
@@ -14,26 +15,32 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
-import android.widget.RelativeLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import org.wordpress.android.R;
 import org.wordpress.android.WordPress;
+import org.wordpress.android.models.AccountHelper;
 import org.wordpress.android.models.Blog;
-import org.wordpress.android.analytics.AnalyticsTracker;
-import org.wordpress.android.ui.WPWebViewActivity;
+import org.wordpress.android.networking.ConnectionChangeReceiver;
+import org.wordpress.android.ui.stats.StatsWidgetProvider;
+import org.wordpress.android.ui.stats.datasets.StatsTable;
 import org.wordpress.android.util.AnalyticsUtils;
+import org.wordpress.android.util.CoreEvents.UserSignedOutCompletely;
 import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.ToastUtils;
 
-import java.util.Locale;
+import de.greenrobot.event.EventBus;
 
 /**
  * Activity for configuring blog specific settings.
  */
-public class BlogPreferencesActivity extends ActionBarActivity {
-    private boolean mIsViewingAdmin;
+public class BlogPreferencesActivity extends AppCompatActivity {
+    public static final String ARG_LOCAL_BLOG_ID = SiteSettingsFragment.ARG_LOCAL_BLOG_ID;
+    public static final int RESULT_BLOG_REMOVED = RESULT_FIRST_USER;
+
+    private static final String KEY_SETTINGS_FRAGMENT = "settings-fragment";
 
     // The blog this activity is managing settings for.
     private Blog blog;
@@ -50,54 +57,75 @@ public class BlogPreferencesActivity extends ActionBarActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.blog_preferences);
 
-        Integer id = getIntent().getIntExtra("id", -1);
+        Integer id = getIntent().getIntExtra(ARG_LOCAL_BLOG_ID, -1);
         blog = WordPress.getBlog(id);
-
-        if (blog == null) {
+        if (WordPress.getBlog(id) == null) {
             Toast.makeText(this, getString(R.string.blog_not_found), Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
 
-        ActionBar actionBar = getSupportActionBar();
-        if (actionBar != null) {
-            actionBar.setElevation(0.0f);
-            actionBar.setTitle(StringUtils.unescapeHTML(blog.getNameOrHostUrl()));
-            actionBar.setDisplayHomeAsUpEnabled(true);
-        }
-
-        mUsernameET = (EditText) findViewById(R.id.username);
-        mPasswordET = (EditText) findViewById(R.id.password);
-        mHttpUsernameET = (EditText) findViewById(R.id.httpuser);
-        mHttpPasswordET = (EditText) findViewById(R.id.httppassword);
-        mScaledImageWidthET = (EditText) findViewById(R.id.scaledImageWidth);
-        mFullSizeCB = (CheckBox) findViewById(R.id.fullSizeImage);
-        mScaledCB = (CheckBox) findViewById(R.id.scaledImage);
-        mImageWidthSpinner = (Spinner) findViewById(R.id.maxImageWidth);
-        Button removeBlogButton = (Button) findViewById(R.id.remove_account);
-
         if (blog.isDotcomFlag()) {
-            // Hide credentials section
-            RelativeLayout credentialsRL = (RelativeLayout) findViewById(R.id.sectionContent);
-            credentialsRL.setVisibility(View.GONE);
-            removeBlogButton.setVisibility(View.GONE);
-        }
-        loadSettingsForBlog();
-    }
+            ActionBar actionBar = getSupportActionBar();
+            if (actionBar != null) {
+                actionBar.setHomeButtonEnabled(true);
+                actionBar.setDisplayHomeAsUpEnabled(true);
+            }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        mIsViewingAdmin = false;
+            FragmentManager fragmentManager = getFragmentManager();
+            Fragment siteSettingsFragment = fragmentManager.findFragmentByTag(KEY_SETTINGS_FRAGMENT);
+
+            if (siteSettingsFragment == null) {
+                siteSettingsFragment = new SiteSettingsFragment();
+                siteSettingsFragment.setArguments(getIntent().getExtras());
+                fragmentManager.beginTransaction()
+                        .replace(android.R.id.content, siteSettingsFragment, KEY_SETTINGS_FRAGMENT)
+                        .commit();
+            }
+        } else {
+            setContentView(R.layout.blog_preferences);
+
+            ActionBar actionBar = getSupportActionBar();
+            if (actionBar != null) {
+                actionBar.setTitle(StringUtils.unescapeHTML(blog.getNameOrHostUrl()));
+                actionBar.setDisplayHomeAsUpEnabled(true);
+            }
+
+            mUsernameET = (EditText) findViewById(R.id.username);
+            mPasswordET = (EditText) findViewById(R.id.password);
+            mHttpUsernameET = (EditText) findViewById(R.id.httpuser);
+            mHttpPasswordET = (EditText) findViewById(R.id.httppassword);
+            mScaledImageWidthET = (EditText) findViewById(R.id.scaledImageWidth);
+            mFullSizeCB = (CheckBox) findViewById(R.id.fullSizeImage);
+            mScaledCB = (CheckBox) findViewById(R.id.scaledImage);
+            mImageWidthSpinner = (Spinner) findViewById(R.id.maxImageWidth);
+            Button removeBlogButton = (Button) findViewById(R.id.remove_account);
+
+            // remove blog & credentials apply only to dot org
+            if (blog.isDotcomFlag()) {
+                View credentialsRL = findViewById(R.id.sectionContent);
+                credentialsRL.setVisibility(View.GONE);
+                removeBlogButton.setVisibility(View.GONE);
+            } else {
+                removeBlogButton.setVisibility(View.VISIBLE);
+                removeBlogButton.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View view) {
+                        removeBlogWithConfirmation();
+                    }
+                });
+            }
+
+            loadSettingsForBlog();
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
 
-        if (mBlogDeleted || mIsViewingAdmin) {
+        if (blog.isDotcomFlag() || mBlogDeleted) {
             return;
         }
 
@@ -149,6 +177,18 @@ public class BlogPreferencesActivity extends ActionBarActivity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        EventBus.getDefault().register(this);
+    }
+
+    @Override
+    protected void onStop() {
+        EventBus.getDefault().unregister(this);
+        super.onStop();
+    }
+
+    @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         int itemID = item.getItemId();
         if (itemID == android.R.id.home) {
@@ -159,19 +199,28 @@ public class BlogPreferencesActivity extends ActionBarActivity {
         return super.onOptionsItemSelected(item);
     }
 
-    private void loadSettingsForBlog() {
-        // Set header labels to upper case
-        ((TextView) findViewById(R.id.l_section1))
-                .setText(getResources().getString(R.string.account_details).toUpperCase(Locale.getDefault()));
-        ((TextView) findViewById(R.id.l_section2))
-                .setText(getResources().getString(R.string.media).toUpperCase(Locale.getDefault()));
-        ((TextView) findViewById(R.id.l_maxImageWidth))
-                .setText(getResources().getString(R.string.max_thumbnail_px_width).toUpperCase(Locale.getDefault()));
-        ((TextView) findViewById(R.id.l_httpuser))
-                .setText(getResources().getString(R.string.http_credentials).toUpperCase(Locale.getDefault()));
+    @SuppressWarnings("unused")
+    public void onEventMainThread(ConnectionChangeReceiver.ConnectionChangeEvent event) {
+        FragmentManager fragmentManager = getFragmentManager();
+        SiteSettingsFragment siteSettingsFragment =
+                (SiteSettingsFragment) fragmentManager.findFragmentByTag(KEY_SETTINGS_FRAGMENT);
 
+        if (siteSettingsFragment != null) {
+            if (!event.isConnected()) {
+                ToastUtils.showToast(this, getString(R.string.site_settings_disconnected_toast));
+            }
+            siteSettingsFragment.setEditingEnabled(event.isConnected());
+
+            // TODO: add this back when delete blog is back
+            //https://github.com/wordpress-mobile/WordPress-Android/commit/6a90e3fe46e24ee40abdc4a7f8f0db06f157900c
+            // Checks for stats widgets that were synched with a blog that could be gone now.
+//            StatsWidgetProvider.updateWidgetsOnLogout(this);
+        }
+    }
+
+    private void loadSettingsForBlog() {
         ArrayAdapter<Object> spinnerArrayAdapter = new ArrayAdapter<Object>(this,
-                R.layout.spinner_textview, new String[]{
+                R.layout.simple_spinner_item, new String[]{
                 "Original Size", "100", "200", "300", "400", "500", "600", "700", "800",
                 "900", "1000", "1100", "1200", "1300", "1400", "1500", "1600", "1700",
                 "1800", "1900", "2000"
@@ -220,7 +269,7 @@ public class BlogPreferencesActivity extends ActionBarActivity {
         scaledImage.setChecked(false);
         scaledImage.setVisibility(View.GONE);
 
-        // sets up a state listener for the fullsize checkbox
+        // sets up a state listener for the full-size checkbox
         CheckBox fullSizeImageCheckBox = (CheckBox) findViewById(R.id.fullSizeImage);
         fullSizeImageCheckBox.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -249,8 +298,6 @@ public class BlogPreferencesActivity extends ActionBarActivity {
 
     /**
      * Hides / shows the scaled image settings
-     *
-     * @param show
      */
     private void showScaledSetting(boolean show) {
         TextView tw = (TextView) findViewById(R.id.l_scaledImage);
@@ -262,61 +309,46 @@ public class BlogPreferencesActivity extends ActionBarActivity {
     /**
      * Remove the blog this activity is managing settings for.
      */
-    public void removeBlog(View view) {
-        final BlogPreferencesActivity activity = this;
+    private void removeBlogWithConfirmation() {
         AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(this);
         dialogBuilder.setTitle(getResources().getText(R.string.remove_account));
         dialogBuilder.setMessage(getResources().getText(R.string.sure_to_remove_account));
         dialogBuilder.setPositiveButton(getResources().getText(R.string.yes), new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int whichButton) {
-                boolean deleteSuccess =
-                        WordPress.wpDB.deleteAccount(BlogPreferencesActivity.this, blog.getLocalTableBlogId());
-                if (deleteSuccess) {
-                    AnalyticsUtils.refreshMetadata();
-                    Toast.makeText(activity, getResources().getText(R.string.blog_removed_successfully),
-                            Toast.LENGTH_SHORT)
-                            .show();
-                    WordPress.wpDB.deleteLastBlogId();
-                    WordPress.currentBlog = null;
-                    mBlogDeleted = true;
-                    activity.finish();
-                } else {
-                    AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(activity);
-                    dialogBuilder.setTitle(getResources().getText(R.string.error));
-                    dialogBuilder.setMessage(getResources().getText(R.string.could_not_remove_account));
-                    dialogBuilder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
-                        public void onClick(DialogInterface dialog, int whichButton) {
-                            // just close the dialog
-                        }
-                    });
-                    dialogBuilder.setCancelable(true);
-                    dialogBuilder.create().show();
-                }
+                removeBlog();
             }
         });
-        dialogBuilder.setNegativeButton(getResources().getText(R.string.no), new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int whichButton) {
-                // just close the window
-            }
-        });
+        dialogBuilder.setNegativeButton(getResources().getText(R.string.no), null);
         dialogBuilder.setCancelable(false);
         dialogBuilder.create().show();
     }
 
-    /**
-     * View the blog admin area in the web browser
-     */
-    public void viewAdmin(View view) {
-        if (blog == null) return;
+    private void removeBlog() {
+        if (WordPress.wpDB.deleteBlog(this, blog.getLocalTableBlogId())) {
+            StatsTable.deleteStatsForBlog(this,blog.getLocalTableBlogId()); // Remove stats data
+            AnalyticsUtils.refreshMetadata();
+            ToastUtils.showToast(this, R.string.blog_removed_successfully);
+            WordPress.wpDB.deleteLastBlogId();
+            WordPress.currentBlog = null;
+            mBlogDeleted = true;
+            setResult(RESULT_BLOG_REMOVED);
 
-        AnalyticsTracker.track(AnalyticsTracker.Stat.OPENED_VIEW_ADMIN);
-        mIsViewingAdmin = true;
-        Intent intent = new Intent(this, WPWebViewActivity.class);
-        intent.putExtra(WPWebViewActivity.AUTHENTICATION_USER, blog.getUsername());
-        intent.putExtra(WPWebViewActivity.AUTHENTICATION_PASSWD, blog.getPassword());
-        intent.putExtra(WPWebViewActivity.URL_TO_LOAD, blog.getAdminUrl());
-        intent.putExtra(WPWebViewActivity.AUTHENTICATION_URL, WPWebViewActivity.getBlogLoginUrl(blog));
-        intent.putExtra(WPWebViewActivity.LOCAL_BLOG_ID, blog.getLocalTableBlogId());
-        startActivity(intent);
+            // If the last blog is removed and the user is not signed in wpcom, broadcast a UserSignedOut event
+            if (!AccountHelper.isSignedIn()) {
+                EventBus.getDefault().post(new UserSignedOutCompletely());
+            }
+
+            // Checks for stats widgets that were synched with a blog that could be gone now.
+            StatsWidgetProvider.updateWidgetsOnLogout(this);
+
+            finish();
+        } else {
+            AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(this);
+            dialogBuilder.setTitle(getResources().getText(R.string.error));
+            dialogBuilder.setMessage(getResources().getText(R.string.could_not_remove_account));
+            dialogBuilder.setPositiveButton("OK", null);
+            dialogBuilder.setCancelable(true);
+            dialogBuilder.create().show();
+        }
     }
 }

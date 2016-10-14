@@ -21,12 +21,14 @@ import android.widget.LinearLayout;
 import android.widget.ListAdapter;
 
 import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.util.DisplayUtils;
 
-public class StatsUIHelper {
+class StatsUIHelper {
     // Max number of rows to show in a stats fragment
-    public static final int STATS_GROUP_MAX_ITEMS = 10;
-    public static final int STATS_CHILD_MAX_ITEMS = 50;
-    public static final int ANIM_DURATION = 150;
+    private static final int STATS_GROUP_MAX_ITEMS = 10;
+    private static final int STATS_CHILD_MAX_ITEMS = 50;
+    private static final int ANIM_DURATION = 150;
 
     // Used for tablet UI
     private static final int TABLET_720DP = 720;
@@ -40,7 +42,7 @@ public class StatsUIHelper {
     }
 
     // Load more bars for 720DP tablets
-    public static boolean shouldLoadMoreBars() {
+    private static boolean shouldLoadMoreBars() {
         return (StatsUtils.getSmallestWidthDP() >= TABLET_720DP);
     }
 
@@ -197,11 +199,11 @@ public class StatsUIHelper {
     /*
      * interpolator for all expand/collapse animations
     */
-    public static Interpolator getInterpolator() {
+    private static Interpolator getInterpolator() {
         return new AccelerateInterpolator();
     }
 
-    public static void hideChildViews(View groupView, int groupPosition,  boolean animate) {
+    private static void hideChildViews(View groupView, int groupPosition, boolean animate) {
         final ViewGroup childContainer = (ViewGroup) groupView.findViewById(R.id.layout_child_container);
         if (childContainer == null) {
             return;
@@ -233,7 +235,7 @@ public class StatsUIHelper {
     /*
      * shows the correct up/down chevron for the passed group
      */
-    public static void setGroupChevron(final boolean isGroupExpanded, View groupView, int groupPosition, boolean animate) {
+    private static void setGroupChevron(final boolean isGroupExpanded, View groupView, int groupPosition, boolean animate) {
         final ImageView chevron = (ImageView) groupView.findViewById(R.id.stats_list_cell_chevron);
         if (chevron == null) {
             return;
@@ -262,8 +264,8 @@ public class StatsUIHelper {
         }
     }
 
-    public static void showChildViews(ExpandableListAdapter mAdapter, LinearLayout mLinearLayout,
-                                      int groupPosition, View groupView, boolean animate) {
+    private static void showChildViews(ExpandableListAdapter mAdapter, LinearLayout mLinearLayout,
+                                       int groupPosition, View groupView, boolean animate) {
         int childCount = Math.min(mAdapter.getChildrenCount(groupPosition), STATS_CHILD_MAX_ITEMS);
         if (childCount == 0) {
             return;
@@ -331,7 +333,9 @@ public class StatsUIHelper {
     }
 
     public static int getNumOfBarsToShow() {
-        if(shouldLoadMoreBars()) {
+        if (StatsUtils.getSmallestWidthDP() >= TABLET_720DP && DisplayUtils.isLandscape(WordPress.getContext())) {
+            return 15;
+        } else if (StatsUtils.getSmallestWidthDP() >= TABLET_600DP) {
             return 10;
         } else {
             return 7;

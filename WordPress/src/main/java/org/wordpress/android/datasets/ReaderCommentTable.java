@@ -102,11 +102,11 @@ public class ReaderCommentTable {
     }
 
     /*
-     * removes all but the first page of comments for the passed post
+     * removes all comments for the passed post
      */
-    public static void purgeExcessCommentsForPost(long blogId, long postId) {
+    public static void purgeCommentsForPost(long blogId, long postId) {
         String[] args = {Long.toString(blogId), Long.toString(postId)};
-        ReaderDatabase.getWritableDb().delete("tbl_comments", "page_number!=1 AND blog_id=? AND post_id=?", args);
+        ReaderDatabase.getWritableDb().delete("tbl_comments", "blog_id=? AND post_id=?", args);
     }
 
     /*
@@ -292,6 +292,15 @@ public class ReaderCommentTable {
         return SqlUtils.boolForQuery(ReaderDatabase.getReadableDb(),
                 "SELECT is_liked FROM tbl_comments WHERE blog_id=? AND post_id=? and comment_id=?",
                 args);
+    }
+
+    public static boolean commentExists(long blogId, long postId, long commentId) {
+        String[] args = {Long.toString(blogId),
+                Long.toString(postId),
+                Long.toString(commentId)};
+
+        return SqlUtils.boolForQuery(ReaderDatabase.getReadableDb(),
+                "SELECT 1 FROM tbl_comments WHERE blog_id=? AND post_id=? AND comment_id=?", args);
     }
 
     private static ReaderComment getCommentFromCursor(Cursor c) {

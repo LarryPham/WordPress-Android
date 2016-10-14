@@ -19,7 +19,7 @@ import org.wordpress.android.util.ToastUtils;
 
 import java.lang.ref.WeakReference;
 
-public class FollowHelper {
+class FollowHelper {
 
     private final WeakReference<Activity> mActivityRef;
 
@@ -94,7 +94,7 @@ public class FollowHelper {
                     boolean isFollowing = response.getBoolean("is_following");
                     mFollowData.setIsFollowing(isFollowing);
                 } catch (JSONException e) {
-                    e.printStackTrace();
+                    AppLog.e(AppLog.T.STATS, e.getMessage());
                 }
             }
         }

@@ -10,11 +10,11 @@
         android:id="@+id/time_header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/white"
         android:clickable="false"
         android:orientation="vertical"
         android:paddingLeft="@dimen/margin_extra_large"
         android:paddingRight="@dimen/margin_extra_large"
+        android:background="@color/white"
         android:visibility="gone"
         tools:visibility="visible">
 
@@ -31,9 +31,11 @@
                 android:layout_height="wrap_content"
                 android:layout_gravity="center_vertical"
                 android:layout_marginLeft="-3dp"
+                android:layout_marginStart="-3dp"
+                android:layout_marginBottom="-1dp"
                 android:textColor="@color/grey_lighten_10"
                 android:textSize="18sp"
-                tools:text="\uf303" />
+                android:text="@string/noticon_clock" />
 
             <org.wordpress.android.widgets.WPTextView
                 android:id="@+id/header_date_text"
@@ -42,6 +44,8 @@
                 android:layout_height="wrap_content"
                 android:layout_gravity="center_vertical"
                 android:layout_marginLeft="@dimen/margin_small"
+                android:layout_marginStart="@dimen/margin_small"
+                android:textAllCaps="true"
                 tools:text="TODAY" />
         </LinearLayout>
 
@@ -56,6 +60,7 @@
         android:id="@+id/note_content_container"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:background="?android:selectableItemBackground"
         android:orientation="vertical">
 
         <LinearLayout
@@ -75,15 +80,16 @@
 
                 <org.wordpress.android.widgets.WPNetworkImageView
                     android:id="@+id/note_avatar"
-                    android:layout_width="@dimen/avatar_sz_medium"
-                    android:layout_height="@dimen/avatar_sz_medium"
+                    android:layout_width="@dimen/notifications_avatar_sz"
+                    android:layout_height="@dimen/notifications_avatar_sz"
                     android:layout_marginRight="@dimen/notifications_adjusted_font_margin"
+                    android:layout_marginEnd="@dimen/notifications_adjusted_font_margin"
                     android:layout_marginTop="@dimen/margin_small" />
 
                 <LinearLayout
                     android:id="@+id/moderate_progress"
-                    android:layout_width="@dimen/avatar_sz_medium"
-                    android:layout_height="@dimen/avatar_sz_medium"
+                    android:layout_width="@dimen/notifications_avatar_sz"
+                    android:layout_height="@dimen/notifications_avatar_sz"
                     android:layout_marginTop="@dimen/margin_small"
                     android:background="@drawable/shape_oval_translucent"
                     android:gravity="center"
@@ -103,12 +109,13 @@
                     android:layout_width="@dimen/note_icon_sz"
                     android:layout_height="@dimen/note_icon_sz"
                     android:layout_marginLeft="31dp"
+                    android:layout_marginStart="31dp"
                     android:layout_marginTop="35dp"
                     android:background="@drawable/shape_oval_blue_white_stroke"
                     android:gravity="center"
                     android:textColor="@color/white"
                     android:textSize="14sp"
-                    tools:text="\uf814" />
+                    tools:text="@string/noticon_note" />
             </FrameLayout>
 
 
@@ -126,9 +133,9 @@
                         android:id="@+id/note_subject_noticon"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:textSize="18sp"
                         android:layout_marginTop="@dimen/margin_extra_small"
-                        android:textColor="@color/grey_lighten_10"/>
+                        android:textColor="@color/grey_lighten_10"
+                        android:textSize="18sp" />
 
                     <org.wordpress.android.widgets.WPTextView
                         android:id="@+id/note_subject"

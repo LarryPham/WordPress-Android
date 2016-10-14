@@ -1,9 +1,7 @@
 package org.wordpress.android.ui.accounts;
 
 import android.app.Activity;
-import android.content.SharedPreferences;
 import android.os.Bundle;
-import android.preference.PreferenceManager;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.KeyEvent;
@@ -20,9 +18,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.wordpress.android.R;
 import org.wordpress.android.WordPress;
-import org.wordpress.android.WordPressDB;
-import org.wordpress.android.ui.WPDrawerActivity;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.models.AccountHelper;
 import org.wordpress.android.ui.accounts.helpers.CreateUserAndBlog;
+import org.wordpress.android.ui.plans.PlansConstants;
 import org.wordpress.android.util.AlertUtils;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.AppLog.T;
@@ -53,11 +52,7 @@ public class NewBlogFragment extends AbstractFragment implements TextWatcher {
 
     @Override
     public void onTextChanged(CharSequence s, int start, int before, int count) {
-        if (fieldsFilled()) {
-            mSignupButton.setEnabled(true);
-        } else {
-            mSignupButton.setEnabled(false);
-        }
+        checkIfFieldsFilled();
     }
 
     public void setSignoutOnCancelMode(boolean mode) {
@@ -79,8 +74,8 @@ public class NewBlogFragment extends AbstractFragment implements TextWatcher {
 
     private void signoutAndFinish() {
         if (mSignoutOnCancelMode) {
-            WordPress.signOut(getActivity());
-            getActivity().setResult(WPDrawerActivity.NEW_BLOG_CANCELED);
+            WordPress.WordPressComSignOut(getActivity());
+            getActivity().setResult(Activity.RESULT_CANCELED);
             getActivity().finish();
         }
     }
@@ -176,10 +171,10 @@ public class NewBlogFragment extends AbstractFragment implements TextWatcher {
 
         final String siteUrl = EditTextUtils.getText(mSiteUrlTextField).trim();
         final String siteName = EditTextUtils.getText(mSiteTitleTextField).trim();
-        final String language = CreateUserAndBlog.getDeviceLanguage(getActivity().getResources());
+        final String language = CreateUserAndBlog.getDeviceLanguage(getActivity());
 
         CreateUserAndBlog createUserAndBlog = new CreateUserAndBlog("", "", "", siteUrl, siteName, language,
-                getRestClientUtils(), getActivity(), new ErrorListener(), new CreateUserAndBlog.Callback() {
+                getRestClientUtils(), new ErrorListener(), new CreateUserAndBlog.Callback() {
             @Override
             public void onStepFinished(CreateUserAndBlog.Step step) {
                 if (getActivity() != null) {
@@ -199,10 +194,10 @@ public class NewBlogFragment extends AbstractFragment implements TextWatcher {
                     String xmlRpcUrl = details.getString("xmlrpc");
                     String homeUrl = details.getString("url");
                     String blogId = details.getString("blogid");
-                    final SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(getActivity());
-                    String username = settings.getString(WordPress.WPCOM_USERNAME_PREFERENCE, "");
+                    String username = AccountHelper.getDefaultAccount().getUserName();
                     BlogUtils.addOrUpdateBlog(blogName, xmlRpcUrl, homeUrl, blogId, username, null, null, null,
-                            true, true);
+                            true, true, PlansConstants.DEFAULT_PLAN_ID_FOR_NEW_BLOG, null, null);
+                    AnalyticsTracker.track(AnalyticsTracker.Stat.CREATED_SITE);
                     ToastUtils.showToast(getActivity(), R.string.new_blog_wpcom_created);
                 } catch (JSONException e) {
                     AppLog.e(T.NUX, "Invalid JSON response from site/new", e);
@@ -220,6 +215,7 @@ public class NewBlogFragment extends AbstractFragment implements TextWatcher {
                 showError(getString(messageId));
             }
         });
+        AppLog.i(T.NUX, "User tries to create a new site, name: " + siteName + ", URL: " + siteUrl);
         createUserAndBlog.startCreateBlogProcess();
     }
 
@@ -239,15 +235,30 @@ public class NewBlogFragment extends AbstractFragment implements TextWatcher {
         mProgressBarSignIn = (RelativeLayout) rootView.findViewById(R.id.nux_sign_in_progress_bar);
 
         mSiteUrlTextField = (EditText) rootView.findViewById(R.id.site_url);
-        mSiteUrlTextField.addTextChangedListener(this);
         mSiteUrlTextField.setOnKeyListener(mSiteUrlKeyListener);
         mSiteUrlTextField.setOnEditorActionListener(mEditorAction);
+        mSiteUrlTextField.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                checkIfFieldsFilled();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                BlogUtils.convertToLowercase(s);
+            }
+        });
 
         mSiteTitleTextField = (EditText) rootView.findViewById(R.id.site_title);
         mSiteTitleTextField.addTextChangedListener(this);
         mSiteTitleTextField.addTextChangedListener(mSiteTitleWatcher);
         mSiteTitleTextField.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-            @Override public void onFocusChange(View v, boolean hasFocus) {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
                 if (hasFocus) {
                     mAutoCompleteUrl = EditTextUtils.getText(mSiteTitleTextField)
                             .equals(EditTextUtils.getText(mSiteUrlTextField))
@@ -256,6 +267,14 @@ public class NewBlogFragment extends AbstractFragment implements TextWatcher {
             }
         });
         return rootView;
+    }
+
+    private void checkIfFieldsFilled() {
+        if (fieldsFilled()) {
+            mSignupButton.setEnabled(true);
+        } else {
+            mSignupButton.setEnabled(false);
+        }
     }
 
     private final OnClickListener mSignupClickListener = new OnClickListener() {

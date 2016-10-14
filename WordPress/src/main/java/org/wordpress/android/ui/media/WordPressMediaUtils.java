@@ -2,6 +2,8 @@ package org.wordpress.android.ui.media;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Fragment;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.database.Cursor;
@@ -11,13 +13,21 @@ import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.support.v4.content.FileProvider;
 import android.widget.ImageView;
+
+import com.android.volley.toolbox.ImageLoader;
+import com.android.volley.toolbox.NetworkImageView;
 
 import org.wordpress.android.R;
 import org.wordpress.android.WordPress;
+import org.wordpress.android.WordPressDB;
+import org.wordpress.android.ui.RequestCodes;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.DeviceUtils;
 import org.wordpress.android.util.MediaUtils;
+import org.wordpress.android.util.PhotonUtils;
 import org.wordpress.android.util.helpers.Version;
 import org.wordpress.passcodelock.AppLockManager;
 
@@ -29,22 +39,15 @@ import java.net.URL;
 import static org.wordpress.mediapicker.MediaUtils.fadeInImage;
 
 public class WordPressMediaUtils {
-    public class RequestCode {
-        public static final int ACTIVITY_REQUEST_CODE_PICTURE_LIBRARY = 1000;
-        public static final int ACTIVITY_REQUEST_CODE_TAKE_PHOTO = 1100;
-        public static final int ACTIVITY_REQUEST_CODE_VIDEO_LIBRARY = 1200;
-        public static final int ACTIVITY_REQUEST_CODE_TAKE_VIDEO = 1300;
-    }
-
     public interface LaunchCameraCallback {
-        public void onMediaCapturePathReady(String mediaCapturePath);
+        void onMediaCapturePathReady(String mediaCapturePath);
     }
 
-    private static void showSDCardRequiredDialog(Activity activity) {
-        AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(activity);
-        dialogBuilder.setTitle(activity.getResources().getText(R.string.sdcard_title));
-        dialogBuilder.setMessage(activity.getResources().getText(R.string.sdcard_message));
-        dialogBuilder.setPositiveButton(activity.getString(R.string.ok), new DialogInterface.OnClickListener() {
+    private static void showSDCardRequiredDialog(Context context) {
+        AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(context);
+        dialogBuilder.setTitle(context.getResources().getText(R.string.sdcard_title));
+        dialogBuilder.setMessage(context.getResources().getText(R.string.sdcard_message));
+        dialogBuilder.setPositiveButton(context.getString(R.string.ok), new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int whichButton) {
                 dialog.dismiss();
             }
@@ -54,48 +57,108 @@ public class WordPressMediaUtils {
     }
 
     public static void launchVideoLibrary(Activity activity) {
-        Intent intent = new Intent(Intent.ACTION_PICK);
-        intent.setType("video/*");
-        intent.setAction(Intent.ACTION_GET_CONTENT);
-
         AppLockManager.getInstance().setExtendedTimeout();
-        activity.startActivityForResult(Intent.createChooser(intent, activity.getString(R.string.pick_video)),
-                RequestCode.ACTIVITY_REQUEST_CODE_PICTURE_LIBRARY);
+        activity.startActivityForResult(prepareVideoLibraryIntent(activity),
+                RequestCodes.VIDEO_LIBRARY);
+    }
+
+    public static void launchVideoLibrary(Fragment fragment) {
+        if (!fragment.isAdded()) {
+            return;
+        }
+        AppLockManager.getInstance().setExtendedTimeout();
+        fragment.startActivityForResult(prepareVideoLibraryIntent(fragment.getActivity()),
+                RequestCodes.VIDEO_LIBRARY);
+    }
+
+
+    public static Intent prepareVideoLibraryIntent(Context context) {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("video/*");
+        return Intent.createChooser(intent, context.getString(R.string.pick_video));
     }
 
     public static void launchVideoCamera(Activity activity) {
-        Intent intent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
-        activity.startActivityForResult(intent, RequestCode.ACTIVITY_REQUEST_CODE_TAKE_VIDEO);
         AppLockManager.getInstance().setExtendedTimeout();
+        activity.startActivityForResult(prepareVideoCameraIntent(), RequestCodes.TAKE_VIDEO);
     }
 
+    public static void launchVideoCamera(Fragment fragment) {
+        if (!fragment.isAdded()) {
+            return;
+        }
+        AppLockManager.getInstance().setExtendedTimeout();
+        fragment.startActivityForResult(prepareVideoCameraIntent(), RequestCodes.TAKE_VIDEO);
+    }
+
+    private static Intent prepareVideoCameraIntent() {
+        return new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
+    }
 
     public static void launchPictureLibrary(Activity activity) {
-        Intent intent = new Intent(Intent.ACTION_PICK);
-        intent.setType("image/*");
-        intent.setAction(Intent.ACTION_GET_CONTENT);
         AppLockManager.getInstance().setExtendedTimeout();
-        activity.startActivityForResult(Intent.createChooser(intent, activity.getString(R.string.pick_photo)),
-                RequestCode.ACTIVITY_REQUEST_CODE_PICTURE_LIBRARY);
+        activity.startActivityForResult(preparePictureLibraryIntent(activity.getString(R.string.pick_photo)),
+                RequestCodes.PICTURE_LIBRARY);
     }
 
-    public static void launchCamera(Activity activity, LaunchCameraCallback callback) {
-        String state = android.os.Environment.getExternalStorageState();
-        if (!state.equals(android.os.Environment.MEDIA_MOUNTED)) {
-            showSDCardRequiredDialog(activity);
-        } else {
-            Intent intent = prepareLaunchCameraIntent(callback);
-            activity.startActivityForResult(intent, RequestCode.ACTIVITY_REQUEST_CODE_TAKE_PHOTO);
+    public static void launchPictureLibrary(Fragment fragment) {
+        if (!fragment.isAdded()) {
+            return;
+        }
+        AppLockManager.getInstance().setExtendedTimeout();
+        fragment.startActivityForResult(preparePictureLibraryIntent(fragment.getActivity()
+                .getString(R.string.pick_photo)), RequestCodes.PICTURE_LIBRARY);
+    }
+
+    private static Intent preparePictureLibraryIntent(String title) {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("image/*");
+        return Intent.createChooser(intent, title);
+    }
+
+    private static Intent prepareGalleryIntent(String title) {
+        Intent intent = new Intent(Intent.ACTION_PICK);
+        intent.setType("image/*");
+        return Intent.createChooser(intent, title);
+    }
+
+    public static void launchCamera(Activity activity, String applicationId, LaunchCameraCallback callback) {
+        Intent intent = preparelaunchCamera(activity, applicationId, callback);
+        if (intent != null) {
             AppLockManager.getInstance().setExtendedTimeout();
+            activity.startActivityForResult(intent, RequestCodes.TAKE_PHOTO);
         }
     }
 
-    private static Intent prepareLaunchCameraIntent(LaunchCameraCallback callback) {
+    public static void launchCamera(Fragment fragment, String applicationId, LaunchCameraCallback callback) {
+        if (!fragment.isAdded()) {
+            return;
+        }
+        Intent intent = preparelaunchCamera(fragment.getActivity(), applicationId, callback);
+        if (intent != null) {
+            AppLockManager.getInstance().setExtendedTimeout();
+            fragment.startActivityForResult(intent, RequestCodes.TAKE_PHOTO);
+        }
+    }
+
+    private static Intent preparelaunchCamera(Context context, String applicationId, LaunchCameraCallback callback) {
+        String state = android.os.Environment.getExternalStorageState();
+        if (!state.equals(android.os.Environment.MEDIA_MOUNTED)) {
+            showSDCardRequiredDialog(context);
+            return null;
+        } else {
+            return getLaunchCameraIntent(context, applicationId, callback);
+        }
+    }
+
+    private static Intent getLaunchCameraIntent(Context context, String applicationId, LaunchCameraCallback callback) {
         File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
 
-        String mediaCapturePath = path + File.separator + "Camera" + File.separator + "wp-" + System.currentTimeMillis() + ".jpg";
+        String mediaCapturePath = path + File.separator + "Camera" + File.separator + "wp-" + System
+                .currentTimeMillis() + ".jpg";
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, Uri.fromFile(new File(mediaCapturePath)));
+        intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, FileProvider.getUriForFile(context,
+                applicationId + ".provider", new File(mediaCapturePath)));
 
         if (callback != null) {
             callback.onMediaCapturePathReady(mediaCapturePath);
@@ -113,6 +176,29 @@ public class WordPressMediaUtils {
         return intent;
     }
 
+    public static void launchPictureLibraryOrCapture(Fragment fragment, String applicationId, LaunchCameraCallback
+            callback) {
+        if (!fragment.isAdded()) {
+            return;
+        }
+        AppLockManager.getInstance().setExtendedTimeout();
+        fragment.startActivityForResult(makePickOrCaptureIntent(fragment.getActivity(), applicationId, callback),
+                RequestCodes.PICTURE_LIBRARY_OR_CAPTURE);
+    }
+
+    private static Intent makePickOrCaptureIntent(Context context, String applicationId, LaunchCameraCallback callback) {
+        Intent pickPhotoIntent = prepareGalleryIntent(context.getString(R.string.capture_or_pick_photo));
+
+        if (DeviceUtils.getInstance().hasCamera(context)) {
+            Intent cameraIntent = getLaunchCameraIntent(context, applicationId, callback);
+            pickPhotoIntent.putExtra(
+                    Intent.EXTRA_INITIAL_INTENTS,
+                    new Intent[]{ cameraIntent });
+        }
+
+        return pickPhotoIntent;
+    }
+
     public static int getPlaceholder(String url) {
         if (MediaUtils.isValidImage(url)) {
             return R.drawable.media_image_placeholder;
@@ -123,9 +209,12 @@ public class WordPressMediaUtils {
         } else if (MediaUtils.isSpreadsheet(url)) {
             return R.drawable.media_spreadsheet;
         } else if (MediaUtils.isVideo(url)) {
-            return R.drawable.media_movieclip;
+            return org.wordpress.android.editor.R.drawable.media_movieclip;
+        } else if (MediaUtils.isAudio(url)) {
+            return R.drawable.media_audio;
+        } else {
+            return 0;
         }
-        return 0;
     }
 
     /**
@@ -169,10 +258,7 @@ public class WordPressMediaUtils {
         }
         String state = cursor.getString(cursor.getColumnIndex("uploadState"));
         cursor.close();
-        if (state != null && state.equals("uploading")) {
-            return false;
-        }
-        return true;
+        return state == null || !state.equals("uploading");
     }
 
     public static class BackgroundDownloadWebImage extends AsyncTask<Uri, String, Bitmap> {
@@ -220,5 +306,74 @@ public class WordPressMediaUtils {
 
     public static Cursor getWordPressMediaVideos(String blogId) {
         return WordPress.wpDB.getMediaFilesForBlog(blogId);
+    }
+
+    /**
+     * Given a media file cursor, returns the thumbnail network URL. Will use photon if available, using the specified
+     * width.
+     * @param cursor the media file cursor
+     * @param width width to use for photon request (if applicable)
+     */
+    public static String getNetworkThumbnailUrl(Cursor cursor, int width) {
+        String thumbnailURL = cursor.getString(cursor.getColumnIndex(WordPressDB.COLUMN_NAME_THUMBNAIL_URL));
+
+        // Allow non-private wp.com and Jetpack blogs to use photon to get a higher res thumbnail
+        if ((WordPress.getCurrentBlog() != null && WordPress.getCurrentBlog().isPhotonCapable())) {
+            String imageURL = cursor.getString(cursor.getColumnIndex(WordPressDB.COLUMN_NAME_FILE_URL));
+            if (imageURL != null) {
+                thumbnailURL = PhotonUtils.getPhotonImageUrl(imageURL, width, 0);
+            }
+        }
+
+        return thumbnailURL;
+    }
+
+    /**
+     * Loads the given network image URL into the {@link NetworkImageView}, using the default {@link ImageLoader}.
+     */
+    public static void loadNetworkImage(String imageUrl, NetworkImageView imageView) {
+        loadNetworkImage(imageUrl, imageView, WordPress.imageLoader);
+    }
+
+    /**
+     * Loads the given network image URL into the {@link NetworkImageView}.
+     */
+    public static void loadNetworkImage(String imageUrl, NetworkImageView imageView, ImageLoader imageLoader) {
+        if (imageUrl != null) {
+            Uri uri = Uri.parse(imageUrl);
+            String filepath = uri.getLastPathSegment();
+
+            int placeholderResId = WordPressMediaUtils.getPlaceholder(filepath);
+            imageView.setErrorImageResId(placeholderResId);
+
+            // no default image while downloading
+            imageView.setDefaultImageResId(0);
+
+            if (MediaUtils.isValidImage(filepath)) {
+                imageView.setTag(imageUrl);
+                imageView.setImageUrl(imageUrl, imageLoader);
+            } else {
+                imageView.setImageResource(placeholderResId);
+            }
+        } else {
+            imageView.setImageResource(0);
+        }
+    }
+
+    /**
+     * Returns a poster (thumbnail) URL given a VideoPress video URL
+     * @param videoUrl the remote URL to the VideoPress video
+     */
+    public static String getVideoPressVideoPosterFromURL(String videoUrl) {
+        String posterUrl = "";
+
+        if (videoUrl != null) {
+            int filetypeLocation = videoUrl.lastIndexOf(".");
+            if (filetypeLocation > 0) {
+                posterUrl = videoUrl.substring(0, filetypeLocation) + "_std.original.jpg";
+            }
+        }
+
+        return posterUrl;
     }
 }

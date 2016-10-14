@@ -27,7 +27,7 @@
                 android:layout_marginLeft="8dp"
                 android:layout_marginRight="8dp"
                 style="@style/WordPress.NUXTitle"
-                app:fontVariation="light"
+                android:fontFamily="sans-serif-light"
                 app:fixWidowWords="true"/>
 
             <RelativeLayout
@@ -36,7 +36,7 @@
                 android:background="@color/white"
                 android:id="@+id/relativeLayout">
 
-                <org.wordpress.android.widgets.OpenSansEditText
+                <org.wordpress.android.widgets.WPEditText
                     android:id="@+id/site_title"
                     android:layout_width="fill_parent"
                     android:layout_height="wrap_content"
@@ -52,7 +52,7 @@
                     android:layout_gravity="center_horizontal"
                     android:layout_alignParentEnd="false"
                     android:layout_alignParentStart="false"
-                    android:src="@drawable/dashicon_edit"
+                    app:srcCompat="@drawable/dashicon_edit"
                     android:layout_centerVertical="true"
                     android:layout_marginLeft="10dp"
                     android:tint="@color/grey_darken_10"/>
@@ -65,13 +65,14 @@
                 android:background="@color/white"
                 android:layout_marginBottom="16dp">
 
-                <org.wordpress.android.widgets.OpenSansEditText
+                <org.wordpress.android.widgets.WPEditText
                     android:id="@+id/site_url"
                     style="@style/WordPress.NUXEditText"
                     android:layout_width="fill_parent"
                     android:layout_height="wrap_content"
                     android:hint="@string/add_account_blog_url"
                     android:inputType="textUri"
+                    android:digits="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
                     android:clickable="true"
                     android:paddingLeft="0dp"
                     android:paddingTop="12dp"
@@ -83,7 +84,7 @@
                 <org.wordpress.android.widgets.WPTextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text=".wordpress.com"
+                    android:text="@string/dot_wordpress_dot_com_url"
                     android:id="@+id/textView"
                     android:layout_alignParentEnd="false"
                     android:layout_marginTop="4dp"
@@ -105,7 +106,7 @@
                     android:layout_gravity="center_horizontal"
                     android:layout_alignParentEnd="false"
                     android:layout_alignParentStart="false"
-                    android:src="@drawable/dashicon_admin_site"
+                    app:srcCompat="@drawable/dashicon_admin_site"
                     android:layout_centerVertical="true"
                     android:layout_marginLeft="10dp"
                     android:tint="@color/grey_darken_10"/>
@@ -113,7 +114,7 @@
 
             <RelativeLayout
                 android:layout_width="wrap_content"
-                android:layout_height="@dimen/nux_button_height"
+                android:layout_height="@dimen/nux_main_button_height"
                 android:layout_marginLeft="16dp"
                 android:layout_marginRight="16dp">
 
@@ -142,7 +143,7 @@
             </RelativeLayout>
 
             <org.wordpress.android.widgets.WPTextView
-                style="@style/WordPress.NUXWhiteButtonNoBg"
+                style="@style/WordPress.NUXFlatButton"
                 android:id="@+id/nux_sign_in_progress_text"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -159,7 +160,7 @@
             android:gravity="bottom">
 
             <org.wordpress.android.widgets.WPTextView
-                style="@style/WordPress.NUXWhiteButtonNoBg"
+                style="@style/WordPress.NUXFlatButton"
                 android:id="@+id/cancel_button"
                 android:layout_width="wrap_content"
                 android:layout_height="48dp"

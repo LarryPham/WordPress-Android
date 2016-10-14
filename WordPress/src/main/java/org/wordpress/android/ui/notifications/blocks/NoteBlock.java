@@ -45,9 +45,10 @@ public class NoteBlock {
     private int mBackgroundColor;
 
     public interface OnNoteBlockTextClickListener {
-        public void onNoteBlockTextClicked(NoteBlockClickableSpan clickedSpan);
-        public void showDetailForNoteIds();
-        public void showSitePreview(long siteId, String siteUrl);
+        void onNoteBlockTextClicked(NoteBlockClickableSpan clickedSpan);
+        void showDetailForNoteIds();
+        void showReaderPostComments();
+        void showSitePreview(long siteId, String siteUrl);
     }
 
     public NoteBlock(JSONObject noteObject, OnNoteBlockTextClickListener onNoteBlockTextClickListener) {
@@ -67,8 +68,9 @@ public class NoteBlock {
         return mNoteData;
     }
 
-    Spannable getNoteText() {
-        return NotificationsUtils.getSpannableContentForRanges(mNoteData, null, mOnNoteBlockTextClickListener);
+    public Spannable getNoteText() {
+        return NotificationsUtils.getSpannableContentForRanges(mNoteData, null,
+                mOnNoteBlockTextClickListener, false);
     }
 
     public String getMetaHomeTitle() {

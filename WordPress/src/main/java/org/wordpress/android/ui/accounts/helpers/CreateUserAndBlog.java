@@ -1,11 +1,8 @@
 package org.wordpress.android.ui.accounts.helpers;
 
-import android.app.Activity;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
-import android.preference.PreferenceManager;
 
 import com.android.volley.VolleyError;
 import com.wordpress.rest.RestRequest;
@@ -15,37 +12,32 @@ import org.json.JSONObject;
 import org.wordpress.android.BuildConfig;
 import org.wordpress.android.R;
 import org.wordpress.android.WordPress;
-import org.wordpress.android.WordPressDB;
+import org.wordpress.android.util.LanguageUtils;
 import org.wordpress.android.networking.RestClientUtils;
 import org.wordpress.android.ui.accounts.AbstractFragment.ErrorListener;
-import org.wordpress.android.ui.reader.actions.ReaderUserActions;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.AppLog.T;
 import org.xmlpull.v1.XmlPullParser;
 
 import java.util.HashMap;
 import java.util.Hashtable;
-import java.util.Locale;
 import java.util.Map;
 
 public class CreateUserAndBlog {
     public static final int WORDPRESS_COM_API_BLOG_VISIBILITY_PUBLIC = 1;
-    public static final int WORDPRESS_COM_API_BLOG_VISIBILITY_BLOCK_SEARCH_ENGINE = 0;
-    public static final int WORDPRESS_COM_API_BLOG_VISIBILITY_PRIVATE = -1;
     private String mEmail;
     private String mUsername;
     private String mPassword;
     private String mSiteUrl;
     private String mSiteName;
     private String mLanguage;
-    private Context mContext;
     private Callback mCallback;
     private ErrorListener mErrorListener;
     private RestClientUtils mRestClient;
     private ResponseHandler mResponseHandler;
 
     public CreateUserAndBlog(String email, String username, String password, String siteUrl, String siteName,
-                             String language, RestClientUtils restClient, Context context,
+                             String language, RestClientUtils restClient,
                              ErrorListener errorListener, Callback callback) {
         mEmail = email;
         mUsername = username;
@@ -54,19 +46,19 @@ public class CreateUserAndBlog {
         mSiteName = siteName;
         mLanguage = language;
         mCallback = callback;
-        mContext = context;
         mErrorListener = errorListener;
         mRestClient = restClient;
         mResponseHandler = new ResponseHandler();
     }
 
-    public static String getDeviceLanguage(Resources resources) {
+    public static String getDeviceLanguage(Context context) {
+        Resources resources = context.getResources();
         XmlResourceParser parser = resources.getXml(R.xml.wpcom_languages);
         Hashtable<String, String> entries = new Hashtable<String, String>();
         String matchedDeviceLanguage = "en - English";
         try {
             int eventType = parser.getEventType();
-            String deviceLanguageCode = Locale.getDefault().getLanguage();
+            String deviceLanguageCode = LanguageUtils.getPatchedCurrentDeviceLanguage(context);
 
             while (eventType != XmlPullParser.END_DOCUMENT) {
                 if (eventType == XmlPullParser.START_TAG) {
@@ -222,7 +214,6 @@ public class CreateUserAndBlog {
             try {
                 if (mStep == Step.AUTHENTICATE_USER) {
                     mCallback.onStepFinished(Step.AUTHENTICATE_USER);
-                    ReaderUserActions.setCurrentUser(response);
                     createBlog();
                 } else {
                     // steps VALIDATE_USER and VALIDATE_SITE could be run simultaneously in
@@ -266,7 +257,6 @@ public class CreateUserAndBlog {
         @Override
         public void onResponse(JSONObject response) {
             AppLog.d(T.NUX, String.format("Create Account step %s", mStep.name()));
-            AppLog.d(T.NUX, String.format("OK %s", response.toString()));
             nextStep(response);
         }
     }

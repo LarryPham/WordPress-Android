@@ -14,43 +14,41 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.android.volley.VolleyError;
 import com.jjoe64.graphview.GraphView;
 import com.jjoe64.graphview.GraphViewSeries;
 
 import org.wordpress.android.R;
 import org.wordpress.android.WordPress;
 import org.wordpress.android.analytics.AnalyticsTracker;
-import org.wordpress.android.ui.stats.exceptions.StatsError;
+import org.wordpress.android.models.Blog;
 import org.wordpress.android.ui.stats.models.VisitModel;
 import org.wordpress.android.ui.stats.models.VisitsModel;
 import org.wordpress.android.ui.stats.service.StatsService;
+import org.wordpress.android.util.AnalyticsUtils;
 import org.wordpress.android.util.AppLog;
-import org.wordpress.android.util.AppLog.T;
 import org.wordpress.android.util.DisplayUtils;
 import org.wordpress.android.util.FormatUtils;
 import org.wordpress.android.util.NetworkUtils;
 import org.wordpress.android.util.StringUtils;
 
-import java.io.Serializable;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 
-import de.greenrobot.event.EventBus;
-
 public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         implements StatsBarGraph.OnGestureListener {
 
     public static final String TAG = StatsVisitorsAndViewsFragment.class.getSimpleName();
     private static final String ARG_SELECTED_GRAPH_BAR = "ARG_SELECTED_GRAPH_BAR";
+    private static final String ARG_PREV_NUMBER_OF_BARS = "ARG_PREV_NUMBER_OF_BARS";
     private static final String ARG_SELECTED_OVERVIEW_ITEM = "ARG_SELECTED_OVERVIEW_ITEM";
     private static final String ARG_CHECKBOX_SELECTED = "ARG_CHECKBOX_SELECTED";
 
 
     private LinearLayout mGraphContainer;
+    private LinearLayout mNoActivtyThisPeriodContainer;
     private StatsBarGraph mGraphView;
     private LinearLayout mModuleButtonsContainer;
     private TextView mDateTextView;
@@ -60,21 +58,28 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
     private CheckedTextView mLegendLabel;
     private LinearLayout mVisitorsCheckboxContainer;
     private CheckBox mVisitorsCheckbox;
-    private boolean mIsCheckboxChecked;
+    private boolean mIsCheckboxChecked = true;
 
     private OnDateChangeListener mListener;
+    private OnOverviewItemChangeListener mOverviewItemChangeListener;
 
-    final OverviewLabel[] overviewItems = {OverviewLabel.VIEWS, OverviewLabel.VISITORS, OverviewLabel.LIKES,
+    private final OverviewLabel[] overviewItems = {OverviewLabel.VIEWS, OverviewLabel.VISITORS, OverviewLabel.LIKES,
             OverviewLabel.COMMENTS};
 
     // Restore the following variables on restart
-    private Serializable mVisitsData; //VisitModel or VolleyError
+    private VisitsModel mVisitsData;
     private int mSelectedOverviewItemIndex = 0;
     private int mSelectedBarGraphBarIndex = -1;
+    private int mPrevNumberOfBarsGraph = -1;
 
     // Container Activity must implement this interface
     public interface OnDateChangeListener {
-        public void onDateChanged(String blogID, StatsTimeframe timeframe, String newDate);
+        void onDateChanged(String blogID, StatsTimeframe timeframe, String newDate);
+    }
+
+    // Container Activity must implement this interface
+    public interface OnOverviewItemChangeListener {
+        void onOverviewItemChanged(OverviewLabel newItem);
     }
 
     @Override
@@ -85,6 +90,20 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         } catch (ClassCastException e) {
             throw new ClassCastException(activity.toString() + " must implement OnDateChangeListener");
         }
+        try {
+            mOverviewItemChangeListener = (OnOverviewItemChangeListener) activity;
+        } catch (ClassCastException e) {
+            throw new ClassCastException(activity.toString() + " must implement OnOverviewItemChangeListener");
+        }
+    }
+
+    void setSelectedOverviewItem(OverviewLabel itemToSelect) {
+        for (int i = 0; i < overviewItems.length; i++) {
+            if (overviewItems[i] == itemToSelect) {
+                mSelectedOverviewItemIndex = i;
+                return;
+            }
+        }
     }
 
     @Override
@@ -94,6 +113,7 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         mDateTextView = (TextView) view.findViewById(R.id.stats_summary_date);
         mGraphContainer = (LinearLayout) view.findViewById(R.id.stats_bar_chart_fragment_container);
         mModuleButtonsContainer = (LinearLayout) view.findViewById(R.id.stats_pager_tabs);
+        mNoActivtyThisPeriodContainer = (LinearLayout) view.findViewById(R.id.stats_bar_chart_no_activity);
 
         mLegendContainer = (LinearLayout) view.findViewById(R.id.stats_legend_container);
         mLegendLabel = (CheckedTextView) view.findViewById(R.id.stats_legend_label);
@@ -120,16 +140,17 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             }
             mModuleButtonsContainer.setVisibility(View.VISIBLE);
         }
+
         return view;
     }
 
     private class TabViewHolder {
-        LinearLayout tab;
-        LinearLayout innerContainer;
-        TextView label;
-        TextView value;
-        ImageView icon;
-        OverviewLabel labelItem;
+        final LinearLayout tab;
+        final LinearLayout innerContainer;
+        final TextView label;
+        final TextView value;
+        final ImageView icon;
+        final OverviewLabel labelItem;
         boolean isChecked = false;
         boolean isLastItem = false;
 
@@ -143,34 +164,32 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             this.labelItem = labelItem;
             this.isChecked = checked;
             this.isLastItem = isLastItem;
-            updateBackGroundAndIcon();
+            updateBackGroundAndIcon(0);
         }
 
         private Drawable getTabIcon() {
             switch (labelItem) {
                 case VISITORS:
-                    return isChecked ? getResources().getDrawable(R.drawable.stats_icon_visitors_active) :
-                            getResources().getDrawable(R.drawable.stats_icon_visitors);
+                    return getResources().getDrawable(R.drawable.stats_icon_visitors);
                 case COMMENTS:
-                    return isChecked ? getResources().getDrawable(R.drawable.stats_icon_comments_active) :
-                            getResources().getDrawable(R.drawable.stats_icon_comments);
+                    return getResources().getDrawable(R.drawable.stats_icon_comments);
                 case LIKES:
-                    return isChecked ? getResources().getDrawable(R.drawable.stats_icon_likes_active) :
-                            getResources().getDrawable(R.drawable.stats_icon_likes);
+                    return getResources().getDrawable(R.drawable.stats_icon_likes);
                 default:
                     // Views and when no prev match
-                    return isChecked ? getResources().getDrawable(R.drawable.stats_icon_views_active) :
-                            getResources().getDrawable(R.drawable.stats_icon_views);
+                    return getResources().getDrawable(R.drawable.stats_icon_views);
             }
         }
 
-        public void updateBackGroundAndIcon() {
+        public void updateBackGroundAndIcon(int currentValue) {
             if (isChecked) {
-                label.setTextColor(getResources().getColor(R.color.grey_dark));
                 value.setTextColor(getResources().getColor(R.color.orange_jazzy));
             } else {
-                label.setTextColor(getResources().getColor(R.color.grey_darken_20));
-                value.setTextColor(getResources().getColor(R.color.blue_wordpress));
+                if (currentValue == 0) {
+                    value.setTextColor(getResources().getColor(R.color.grey));
+                } else {
+                    value.setTextColor(getResources().getColor(R.color.blue_wordpress));
+                }
             }
 
             icon.setImageDrawable(getTabIcon());
@@ -195,7 +214,7 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         }
     }
 
-    private View.OnClickListener TopButtonsOnClickListener = new View.OnClickListener() {
+    private final View.OnClickListener TopButtonsOnClickListener = new View.OnClickListener() {
         @Override
         public void onClick(View v) {
             if (!isAdded()) {
@@ -227,12 +246,17 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
                 return;
 
             mSelectedOverviewItemIndex = checkedId;
+            if (mOverviewItemChangeListener != null) {
+                mOverviewItemChangeListener.onOverviewItemChanged(
+                        overviewItems[mSelectedOverviewItemIndex]
+                );
+            }
             updateUI();
         }
     };
 
 
-    View.OnClickListener onCheckboxClicked = new View.OnClickListener() {
+    private final View.OnClickListener onCheckboxClicked = new View.OnClickListener() {
         @Override
         public void onClick(View view) {
             // Is the view now checked?
@@ -241,13 +265,26 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         }
     };
 
+
     @Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+    protected boolean hasDataAvailable() {
+        return mVisitsData != null;
+    }
+    @Override
+    protected void saveStatsData(Bundle outState) {
+        if (hasDataAvailable()) {
+            outState.putSerializable(ARG_REST_RESPONSE, mVisitsData);
+        }
+        outState.putInt(ARG_SELECTED_GRAPH_BAR, mSelectedBarGraphBarIndex);
+        outState.putInt(ARG_PREV_NUMBER_OF_BARS, mPrevNumberOfBarsGraph);
+        outState.putInt(ARG_SELECTED_OVERVIEW_ITEM, mSelectedOverviewItemIndex);
+        outState.putBoolean(ARG_CHECKBOX_SELECTED, mVisitorsCheckbox.isChecked());
+    }
+    @Override
+    protected void restoreStatsData(Bundle savedInstanceState) {
         if (savedInstanceState != null) {
-            AppLog.d(T.STATS, "StatsVisitorsAndViewsFragment > restoring instance state");
             if (savedInstanceState.containsKey(ARG_REST_RESPONSE)) {
-                mVisitsData = savedInstanceState.getSerializable(ARG_REST_RESPONSE);
+                mVisitsData = (VisitsModel) savedInstanceState.getSerializable(ARG_REST_RESPONSE);
             }
             if (savedInstanceState.containsKey(ARG_SELECTED_OVERVIEW_ITEM)) {
                 mSelectedOverviewItemIndex = savedInstanceState.getInt(ARG_SELECTED_OVERVIEW_ITEM, 0);
@@ -255,52 +292,22 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             if (savedInstanceState.containsKey(ARG_SELECTED_GRAPH_BAR)) {
                 mSelectedBarGraphBarIndex = savedInstanceState.getInt(ARG_SELECTED_GRAPH_BAR, -1);
             }
+            if (savedInstanceState.containsKey(ARG_PREV_NUMBER_OF_BARS)) {
+                mPrevNumberOfBarsGraph = savedInstanceState.getInt(ARG_PREV_NUMBER_OF_BARS, -1);
+            }
 
             mIsCheckboxChecked = savedInstanceState.getBoolean(ARG_CHECKBOX_SELECTED, true);
-        } else {
-            mIsCheckboxChecked = true;
         }
     }
 
     @Override
-    public void onSaveInstanceState(Bundle outState) {
-        //AppLog.d(T.STATS, "StatsVisitorsAndViewsFragment > saving instance state");
-
-        // FIX for https://github.com/wordpress-mobile/WordPress-Android/issues/2228
-        if (mVisitsData != null && mVisitsData instanceof VolleyError) {
-            VolleyError currentVolleyError = (VolleyError) mVisitsData;
-            mVisitsData = StatsUtils.rewriteVolleyError(currentVolleyError, getString(R.string.error_refresh_stats));
-        }
-        outState.putSerializable(ARG_REST_RESPONSE, mVisitsData);
-        outState.putInt(ARG_SELECTED_GRAPH_BAR, mSelectedBarGraphBarIndex);
-        outState.putInt(ARG_SELECTED_OVERVIEW_ITEM, mSelectedOverviewItemIndex);
-        outState.putBoolean(ARG_CHECKBOX_SELECTED, mVisitorsCheckbox.isChecked());
-
-        super.onSaveInstanceState(outState);
+    protected void showErrorUI(String label) {
+        setupNoResultsUI(false);
     }
 
     @Override
-    public void onStart() {
-        super.onStart();
-        EventBus.getDefault().register(this);
-    }
-
-    @Override
-    public void onStop() {
-        EventBus.getDefault().unregister(this);
-        super.onStop();
-    }
-
-    @Override
-    public void onResume() {
-        super.onResume();
-
-        if (mVisitsData != null) {
-            updateUI();
-        } else {
-            setupNoResultsUI(true);
-            mMoreDataListener.onRefreshRequested(new StatsService.StatsEndpointsEnum[]{StatsService.StatsEndpointsEnum.VISITS});
-        }
+    protected void showPlaceholderUI() {
+        setupNoResultsUI(true);
     }
 
     private VisitModel[] getDataToShowOnGraph(VisitsModel visitsData) {
@@ -317,7 +324,7 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         return visitModelsToShow;
     }
 
-    private void updateUI() {
+    protected void updateUI() {
         if (!isAdded()) {
             return;
         }
@@ -327,16 +334,14 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             return;
         }
 
-        if (mVisitsData instanceof VolleyError || mVisitsData instanceof StatsError) {
-            setupNoResultsUI(false);
-            return;
-        }
-
-        final VisitModel[] dataToShowOnGraph = getDataToShowOnGraph((VisitsModel)mVisitsData);
+        final VisitModel[] dataToShowOnGraph = getDataToShowOnGraph(mVisitsData);
         if (dataToShowOnGraph == null || dataToShowOnGraph.length == 0) {
             setupNoResultsUI(false);
             return;
         }
+
+        // Hide the "no-activity this period" message
+        mNoActivtyThisPeriodContainer.setVisibility(View.GONE);
 
         // Read the selected Tab in the UI
         OverviewLabel selectedStatsType = overviewItems[mSelectedOverviewItemIndex];
@@ -365,6 +370,17 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             secondarySeriesItems = new GraphView.GraphViewData[dataToShowOnGraph.length];
         }
 
+        // index of days that should be XXX on the graph
+        final boolean[] weekendDays;
+        if (getTimeframe() == StatsTimeframe.DAY) {
+            weekendDays = new boolean[dataToShowOnGraph.length];
+        } else {
+            weekendDays = null;
+        }
+
+        // Check we have at least one result in the current section.
+        boolean atLeastOneResultIsAvailable = false;
+
         // Fill series variables with data
         for (int i = 0; i < dataToShowOnGraph.length; i++) {
             int currentItemValue = 0;
@@ -384,6 +400,10 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             }
             mainSeriesItems[i] = new GraphView.GraphViewData(i, currentItemValue);
 
+            if (currentItemValue > 0) {
+                atLeastOneResultIsAvailable = true;
+            }
+
             if (mIsCheckboxChecked && secondarySeriesItems != null) {
                 secondarySeriesItems[i] = new GraphView.GraphViewData(i, dataToShowOnGraph[i].getVisitors());
             }
@@ -391,6 +411,20 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             String currentItemStatsDate = dataToShowOnGraph[i].getPeriod();
             horLabels[i] = getDateLabelForBarInGraph(currentItemStatsDate);
             mStatsDate[i] = currentItemStatsDate;
+
+            if (weekendDays != null) {
+                SimpleDateFormat from = new SimpleDateFormat(StatsConstants.STATS_INPUT_DATE_FORMAT);
+                try {
+                    Date date = from.parse(currentItemStatsDate);
+                    Calendar c = Calendar.getInstance();
+                    c.setFirstDayOfWeek(Calendar.MONDAY);
+                    c.setTimeInMillis(date.getTime());
+                    weekendDays[i] = c.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY || c.get(Calendar.DAY_OF_WEEK) == Calendar.SATURDAY;
+                } catch (ParseException e) {
+                    weekendDays[i] = false;
+                    AppLog.e(AppLog.T.STATS, e);
+                }
+            }
         }
 
         if (mGraphContainer.getChildCount() >= 1 && mGraphContainer.getChildAt(0) instanceof GraphView) {
@@ -405,6 +439,7 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
 
         GraphViewSeries mainSeriesOnScreen = new GraphViewSeries(mainSeriesItems);
         mainSeriesOnScreen.getStyle().color = getResources().getColor(R.color.stats_bar_graph_main_series);
+        mainSeriesOnScreen.getStyle().outerColor = getResources().getColor(R.color.translucent_grey_lighten_30);
         mainSeriesOnScreen.getStyle().highlightColor = getResources().getColor(R.color.stats_bar_graph_main_series_highlight);
         mainSeriesOnScreen.getStyle().outerhighlightColor = getResources().getColor(R.color.stats_bar_graph_outer_highlight);
         mainSeriesOnScreen.getStyle().padding = DisplayUtils.dpToPx(getActivity(), 5);
@@ -439,9 +474,26 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
                 DisplayUtils.dpToPx(getActivity(), StatsConstants.STATS_GRAPH_BAR_MAX_COLUMN_WIDTH_DP)
         );
         mGraphView.setHorizontalLabels(horLabels);
-
         mGraphView.setGestureListener(this);
 
+        // If zero results in the current section disable clicks on the graph and show the dialog.
+        mNoActivtyThisPeriodContainer.setVisibility(atLeastOneResultIsAvailable ? View.GONE : View.VISIBLE);
+        mGraphView.setClickable(atLeastOneResultIsAvailable);
+
+        // Draw the background on weekend days
+        mGraphView.setWeekendDays(weekendDays);
+
+        // Reset the bar selected upon rotation of the device when the no. of bars can change with orientation.
+        // Only happens on 720DP tablets
+        if (mPrevNumberOfBarsGraph != -1 && mPrevNumberOfBarsGraph != dataToShowOnGraph.length) {
+            mSelectedBarGraphBarIndex = -1;
+            mPrevNumberOfBarsGraph = dataToShowOnGraph.length;
+            onBarTapped(dataToShowOnGraph.length - 1);
+            mGraphView.highlightBar(dataToShowOnGraph.length - 1);
+            return;
+        }
+
+        mPrevNumberOfBarsGraph = dataToShowOnGraph.length;
         int barSelectedOnGraph;
         if (mSelectedBarGraphBarIndex == -1) {
             // No previous bar was highlighted, highlight the most recent one
@@ -449,12 +501,9 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         } else if (mSelectedBarGraphBarIndex < dataToShowOnGraph.length) {
             barSelectedOnGraph = mSelectedBarGraphBarIndex;
         } else {
-            // A previous bar was highlighted, but it's out of the screen now. Device Rotated.
-            // This cannot happen now, since we've fixed number of bars on a device. # of bars doesn't change with device rotation.
+            // A previous bar was highlighted, but it's out of the screen now. This should never happen atm.
             barSelectedOnGraph = dataToShowOnGraph.length - 1;
             mSelectedBarGraphBarIndex = barSelectedOnGraph;
-            // TODO: make sure to handle this case in the modules below, otherwise the graph is updated but not other fragments
-            // that are still pointing to the old selected date.
         }
 
         updateUIBelowTheGraph(barSelectedOnGraph);
@@ -469,8 +518,8 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         }
         double largest = Integer.MIN_VALUE;
 
-        for (int i = 0; i < dataToShowOnGraph.length; i++) {
-            int currentItemValue = dataToShowOnGraph[i].getViews();
+        for (VisitModel aDataToShowOnGraph : dataToShowOnGraph) {
+            int currentItemValue = aDataToShowOnGraph.getViews();
             if (currentItemValue > largest) {
                 largest = currentItemValue;
             }
@@ -489,12 +538,7 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             return;
         }
 
-        if (mVisitsData instanceof VolleyError) {
-            setupNoResultsUI(false);
-            return;
-        }
-
-        final VisitModel[] dataToShowOnGraph = getDataToShowOnGraph((VisitsModel)mVisitsData);
+        final VisitModel[] dataToShowOnGraph = getDataToShowOnGraph(mVisitsData);
 
         // Make sure we've data to show on the screen
         if (dataToShowOnGraph.length == 0) {
@@ -520,21 +564,23 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             View o = mModuleButtonsContainer.getChildAt(i);
             if (o instanceof LinearLayout && o.getTag() instanceof  TabViewHolder) {
                 TabViewHolder tabViewHolder = (TabViewHolder)o.getTag();
-                tabViewHolder.updateBackGroundAndIcon();
+                int currentValue = 0;
                 switch (tabViewHolder.labelItem) {
                     case VIEWS:
-                        tabViewHolder.value.setText(FormatUtils.formatDecimal(modelTapped.getViews()));
+                        currentValue = modelTapped.getViews();
                         break;
                     case VISITORS:
-                        tabViewHolder.value.setText(FormatUtils.formatDecimal(modelTapped.getVisitors()));
+                        currentValue = modelTapped.getVisitors();
                         break;
                     case LIKES:
-                        tabViewHolder.value.setText(FormatUtils.formatDecimal(modelTapped.getLikes()));
+                        currentValue = modelTapped.getLikes();
                         break;
                     case COMMENTS:
-                        tabViewHolder.value.setText(FormatUtils.formatDecimal(modelTapped.getComments()));
+                        currentValue = modelTapped.getComments();
                         break;
                 }
+                tabViewHolder.value.setText(FormatUtils.formatDecimal(currentValue));
+                tabViewHolder.updateBackGroundAndIcon(currentValue);
             }
         }
     }
@@ -558,9 +604,9 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
                     //Calculate the end of the week
                     parsedDate = sdf.parse(date);
                     c = Calendar.getInstance();
+                    c.setFirstDayOfWeek(Calendar.MONDAY);
                     c.setTime(parsedDate);
                     // first day of this week
-                    c.setFirstDayOfWeek(Calendar.MONDAY);
                     c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY );
                     String startDateLabel = StatsUtils.msToString(c.getTimeInMillis(), StatsConstants.STATS_OUTPUT_DATE_MONTH_LONG_DAY_LONG_FORMAT);
                     // last day of this week
@@ -578,7 +624,6 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         }
         return "";
     }
-
 
     /**
      * Return the date string that is displayed under each bar in the graph
@@ -621,10 +666,10 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
             LayoutInflater inflater = LayoutInflater.from(context);
             View emptyBarGraphView = inflater.inflate(R.layout.stats_bar_graph_empty, mGraphContainer, false);
 
-          // We could show loading indicator here
-            if (isLoading) {
-                final TextView emptyLabel = (TextView) emptyBarGraphView.findViewById(R.id.stats_bar_graph_empty_label);
-                emptyLabel.setText("");
+            final TextView emptyLabel = (TextView) emptyBarGraphView.findViewById(R.id.stats_bar_graph_empty_label);
+            emptyLabel.setText("");
+            if (!isLoading) {
+                mNoActivtyThisPeriodContainer.setVisibility(View.VISIBLE);
             }
 
             if (emptyBarGraphView != null) {
@@ -651,21 +696,30 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
     }
 
     @SuppressWarnings("unused")
-    public void onEventMainThread(StatsEvents.SectionUpdated event) {
-        if (!isAdded()) {
+    public void onEventMainThread(StatsEvents.VisitorsAndViewsUpdated event) {
+        if (!shouldUpdateFragmentOnUpdateEvent(event)) {
             return;
         }
 
-        StatsService.StatsEndpointsEnum sectionToUpdate = event.mEndPointName;
-        if (sectionToUpdate != StatsService.StatsEndpointsEnum.VISITS) {
-            return;
-        }
-
-        Serializable dataObj = event.mResponseObjectModel;
-
-        mVisitsData = (dataObj == null || dataObj instanceof VolleyError) ? null : (VisitsModel) dataObj;
+        mVisitsData = event.mVisitsAndViews;
         mSelectedBarGraphBarIndex = -1;
-        mSelectedOverviewItemIndex = 0;
+
+        // Reset the bar to highlight
+        if (mGraphView != null) {
+            mGraphView.resetHighlightBar();
+        }
+
+        updateUI();
+    }
+
+    @SuppressWarnings("unused")
+    public void onEventMainThread(StatsEvents.SectionUpdateError event) {
+        if (!shouldUpdateFragmentOnErrorEvent(event)) {
+            return;
+        }
+
+        mVisitsData = null;
+        mSelectedBarGraphBarIndex = -1;
 
         // Reset the bar to highlight
         if (mGraphView != null) {
@@ -677,6 +731,9 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
 
     @Override
     public void onBarTapped(int tappedBar) {
+        if (!isAdded()) {
+            return;
+        }
         //AppLog.d(AppLog.T.STATS, " Tapped bar date " + mStatsDate[tappedBar]);
         mSelectedBarGraphBarIndex = tappedBar;
         updateUIBelowTheGraph(tappedBar);
@@ -750,14 +807,19 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
         // Update the data below the graph
         if (mListener!= null) {
             // Should never be null
-            final String blogId = StatsUtils.getBlogId(getLocalTableBlogID());
-            mListener.onDateChanged(blogId, getTimeframe(), calculatedDate);
+            final Blog currentBlog = WordPress.getBlog(getLocalTableBlogID());
+            if (currentBlog != null && currentBlog.getDotComBlogId() != null) {
+                mListener.onDateChanged(currentBlog.getDotComBlogId(), getTimeframe(), calculatedDate);
+            }
         }
 
-        AnalyticsTracker.track(AnalyticsTracker.Stat.STATS_TAPPED_BAR_CHART);
+        AnalyticsUtils.trackWithBlogDetails(
+                AnalyticsTracker.Stat.STATS_TAPPED_BAR_CHART,
+                WordPress.getBlog(getLocalTableBlogID())
+        );
     }
 
-    private enum OverviewLabel {
+    public enum OverviewLabel {
         VIEWS(R.string.stats_views),
         VISITORS(R.string.stats_visitors),
         LIKES(R.string.stats_likes),
@@ -766,27 +828,19 @@ public class StatsVisitorsAndViewsFragment extends StatsAbstractFragment
 
         private final int mLabelResId;
 
-        private OverviewLabel(int labelResId) {
+        OverviewLabel(int labelResId) {
             mLabelResId = labelResId;
         }
 
         public String getLabel() {
             return WordPress.getContext().getString(mLabelResId).toUpperCase();
         }
-
-        public static String[] toStringArray(OverviewLabel[] timeframes) {
-            String[] titles = new String[timeframes.length];
-
-            for (int i = 0; i < timeframes.length; i++) {
-                titles[i] = timeframes[i].getLabel();
-            }
-
-            return titles;
-        }
     }
 
     @Override
-    protected void resetDataModel() {
-        mVisitsData = null;
+    protected StatsService.StatsEndpointsEnum[] sectionsToUpdate() {
+        return new StatsService.StatsEndpointsEnum[]{
+                StatsService.StatsEndpointsEnum.VISITS
+        };
     }
 }

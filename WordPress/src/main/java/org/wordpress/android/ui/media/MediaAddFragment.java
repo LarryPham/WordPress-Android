@@ -20,16 +20,17 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Toast;
 
+import org.wordpress.android.BuildConfig;
 import org.wordpress.android.R;
 import org.wordpress.android.WordPress;
 import org.wordpress.android.models.Blog;
+import org.wordpress.android.models.MediaUploadState;
+import org.wordpress.android.ui.RequestCodes;
 import org.wordpress.android.ui.media.WordPressMediaUtils.LaunchCameraCallback;
-import org.wordpress.android.ui.media.WordPressMediaUtils.RequestCode;
-import org.wordpress.android.ui.media.services.MediaUploadEvents;
+import org.wordpress.android.ui.media.services.MediaEvents.MediaChanged;
 import org.wordpress.android.ui.media.services.MediaUploadService;
 import org.wordpress.android.util.MediaUtils;
 import org.wordpress.android.util.NetworkUtils;
-import org.wordpress.android.util.ToastUtils;
 import org.wordpress.android.util.helpers.MediaFile;
 
 import java.io.File;
@@ -44,11 +45,6 @@ import de.greenrobot.event.EventBus;
 public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
     private static final String BUNDLE_MEDIA_CAPTURE_PATH = "mediaCapturePath";
     private String mMediaCapturePath = "";
-    private MediaAddFragmentCallback mCallback;
-
-    public interface MediaAddFragmentCallback {
-        public void onMediaAdded(String mediaId);
-    }
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -61,17 +57,6 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
     }
 
     @Override
-    public void onAttach(Activity activity) {
-        super.onAttach(activity);
-
-        try {
-            mCallback = (MediaAddFragmentCallback) activity;
-        } catch (ClassCastException e) {
-            throw new ClassCastException(activity.toString() + " must implement " + MediaAddFragmentCallback.class.getSimpleName());
-        }
-    }
-
-    @Override
     public void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         if (mMediaCapturePath != null && !mMediaCapturePath.equals(""))
@@ -81,14 +66,12 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
     @Override
     public void onStart() {
         super.onStart();
-        EventBus.getDefault().register(this);
         // register context for change in connection status
         getActivity().registerReceiver(mReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
     }
 
     @Override
     public void onStop() {
-        EventBus.getDefault().unregister(this);
         getActivity().unregisterReceiver(mReceiver);
         super.onStop();
     }
@@ -98,11 +81,6 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
         super.onResume();
 
         resumeMediaUploadService();
-    }
-
-    @Override
-    public void onPause() {
-        super.onPause();
     }
 
     private BroadcastReceiver mReceiver = new BroadcastReceiver() {
@@ -116,41 +94,28 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
         }
     };
 
-    @SuppressWarnings("unused")
-    public void onEventMainThread(MediaUploadEvents.MediaUploadFailed event) {
-        if (isAdded()) {
-            ToastUtils.showToast(getActivity(), event.mErrorMessage, ToastUtils.Duration.SHORT);
-        }
-        mCallback.onMediaAdded(event.mLocalId);
-    }
-
-    @SuppressWarnings("unused")
-    public void onEventMainThread(MediaUploadEvents.MediaUploadSucceed event) {
-        mCallback.onMediaAdded(event.mLocalId);
-    }
-
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
 
-        if (data != null || requestCode == RequestCode.ACTIVITY_REQUEST_CODE_TAKE_PHOTO ||
-                requestCode == RequestCode.ACTIVITY_REQUEST_CODE_TAKE_VIDEO) {
+        if (data != null || requestCode == RequestCodes.TAKE_PHOTO ||
+                requestCode == RequestCodes.TAKE_VIDEO) {
             String path;
 
             switch (requestCode) {
-                case RequestCode.ACTIVITY_REQUEST_CODE_PICTURE_LIBRARY:
-                case RequestCode.ACTIVITY_REQUEST_CODE_VIDEO_LIBRARY:
+                case RequestCodes.PICTURE_LIBRARY:
+                case RequestCodes.VIDEO_LIBRARY:
                     Uri imageUri = data.getData();
                     fetchMedia(imageUri);
                     break;
-                case RequestCode.ACTIVITY_REQUEST_CODE_TAKE_PHOTO:
+                case RequestCodes.TAKE_PHOTO:
                     if (resultCode == Activity.RESULT_OK) {
                         path = mMediaCapturePath;
                         mMediaCapturePath = null;
                         queueFileForUpload(path);
                     }
                     break;
-                case RequestCode.ACTIVITY_REQUEST_CODE_TAKE_VIDEO:
+                case RequestCodes.TAKE_VIDEO:
                     if (resultCode == Activity.RESULT_OK) {
                         path = getRealPathFromURI(MediaUtils.getLastRecordedVideoUri(getActivity()));
                         queueFileForUpload(path);
@@ -200,8 +165,13 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
             return null;
         }
 
-        cursor.moveToFirst();
-        String path = cursor.getString(column_index);
+        String path;
+        if (cursor.moveToFirst()) {
+            path = cursor.getString(column_index);
+        } else {
+            path = null;
+        }
+
         cursor.close();
         return path;
     }
@@ -242,8 +212,7 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
             mediaFile.setMimeType(mimeType);
         }
         WordPress.wpDB.saveMediaFile(mediaFile);
-        mCallback.onMediaAdded(mediaFile.getMediaId());
-
+        EventBus.getDefault().post(new MediaChanged(String.valueOf(blog.getLocalTableBlogId()), mediaFile.getMediaId()));
         startMediaUploadService();
     }
 
@@ -263,32 +232,24 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
     }
 
     public void launchCamera() {
-        if (isAdded()) {
-            WordPressMediaUtils.launchCamera(getActivity(), this);
-        }
+        WordPressMediaUtils.launchCamera(this, BuildConfig.APPLICATION_ID, this);
     }
 
     public void launchVideoCamera() {
-        if (isAdded()) {
-            WordPressMediaUtils.launchVideoCamera(getActivity());
-        }
+        WordPressMediaUtils.launchVideoCamera(this);
     }
 
     public void launchVideoLibrary() {
-        if (isAdded()) {
-            WordPressMediaUtils.launchVideoLibrary(getActivity());
-        }
+        WordPressMediaUtils.launchVideoLibrary(this);
     }
 
     public void launchPictureLibrary() {
-        if (isAdded()) {
-            WordPressMediaUtils.launchPictureLibrary(getActivity());
-        }
+        WordPressMediaUtils.launchPictureLibrary(this);
     }
 
     public void addToQueue(String mediaId) {
         String blogId = String.valueOf(WordPress.getCurrentBlog().getLocalTableBlogId());
-        WordPress.wpDB.updateMediaUploadState(blogId, mediaId, "queued");
+        WordPress.wpDB.updateMediaUploadState(blogId, mediaId, MediaUploadState.QUEUED);
         startMediaUploadService();
     }
 
@@ -303,11 +264,6 @@ public class MediaAddFragment extends Fragment implements LaunchCameraCallback {
         protected Uri doInBackground(Uri... uris) {
             Uri imageUri = uris[0];
             return MediaUtils.downloadExternalMedia(getActivity(), imageUri);
-        }
-
-        @Override
-        protected void onPreExecute() {
-            Toast.makeText(getActivity(), R.string.download, Toast.LENGTH_SHORT).show();
         }
 
         protected void onPostExecute(Uri newUri) {

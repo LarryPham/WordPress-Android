@@ -1,45 +1,41 @@
 package org.wordpress.android.ui.reader;
 
-import android.app.Activity;
 import android.app.Fragment;
 import android.app.FragmentManager;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Parcelable;
+import android.support.annotation.NonNull;
 import android.support.v13.app.FragmentStatePagerAdapter;
+import android.support.v4.app.NavUtils;
+import android.support.v4.app.TaskStackBuilder;
 import android.support.v4.view.ViewPager;
-import android.support.v7.app.ActionBarActivity;
+import android.support.v7.app.ActionBar;
+import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
-import android.text.TextUtils;
 import android.util.SparseArray;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.PopupMenu;
 import android.widget.ProgressBar;
-
-import com.cocosw.undobar.UndoBarController;
 
 import org.wordpress.android.R;
 import org.wordpress.android.analytics.AnalyticsTracker;
 import org.wordpress.android.datasets.ReaderPostTable;
-import org.wordpress.android.models.ReaderPost;
 import org.wordpress.android.models.ReaderTag;
-import org.wordpress.android.ui.reader.ReaderAnim.AnimationEndListener;
-import org.wordpress.android.ui.reader.ReaderAnim.Duration;
 import org.wordpress.android.ui.reader.ReaderTypes.ReaderPostListType;
 import org.wordpress.android.ui.reader.actions.ReaderActions;
-import org.wordpress.android.ui.reader.actions.ReaderBlogActions;
-import org.wordpress.android.ui.reader.actions.ReaderBlogActions.BlockedBlogResult;
+import org.wordpress.android.ui.reader.actions.ReaderPostActions;
 import org.wordpress.android.ui.reader.models.ReaderBlogIdPostId;
 import org.wordpress.android.ui.reader.models.ReaderBlogIdPostIdList;
 import org.wordpress.android.ui.reader.services.ReaderPostService;
-import org.wordpress.android.ui.reader.views.ReaderViewPager;
+import org.wordpress.android.util.AnalyticsUtils;
+import org.wordpress.android.util.AniUtils;
 import org.wordpress.android.util.AppLog;
 import org.wordpress.android.util.NetworkUtils;
-import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.widgets.WPViewPager;
 
-import javax.annotation.Nonnull;
+import java.util.HashSet;
 
 import de.greenrobot.event.EventBus;
 
@@ -48,23 +44,25 @@ import de.greenrobot.event.EventBus;
  * posts with a specific tag or in a specific blog, but can also be used to show a single
  * post detail
  */
-public class ReaderPostPagerActivity extends ActionBarActivity
-        implements ReaderInterfaces.OnPostPopupListener,
-                   ReaderInterfaces.AutoHideToolbarListener {
+public class ReaderPostPagerActivity extends AppCompatActivity
+        implements ReaderInterfaces.AutoHideToolbarListener {
 
-    private Toolbar mToolbar;
-    private ReaderViewPager mViewPager;
+    private WPViewPager mViewPager;
     private ProgressBar mProgress;
+    private Toolbar mToolbar;
 
     private ReaderTag mCurrentTag;
+    private boolean mIsFeed;
     private long mBlogId;
     private long mPostId;
+    private int mLastSelectedPosition = -1;
     private ReaderPostListType mPostListType;
 
     private boolean mIsRequestingMorePosts;
     private boolean mIsSinglePostView;
+    private boolean mIsRelatedPostView;
 
-    private static final String ARG_IS_SINGLE_POST = "is_single_post";
+    private final HashSet<Integer> mTrackedPositions = new HashSet<>();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -73,24 +71,22 @@ public class ReaderPostPagerActivity extends ActionBarActivity
 
         mToolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(mToolbar);
-        mToolbar.setNavigationOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                onBackPressed();
-            }
-        });
-        getSupportActionBar().setDisplayShowTitleEnabled(true);
-        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
 
-        mViewPager = (ReaderViewPager) findViewById(R.id.viewpager);
+        ActionBar actionBar = getSupportActionBar();
+        if (actionBar != null) {
+            actionBar.setDisplayShowTitleEnabled(true);
+            actionBar.setDisplayHomeAsUpEnabled(true);
+        }
+
+        mViewPager = (WPViewPager) findViewById(R.id.viewpager);
         mProgress = (ProgressBar) findViewById(R.id.progress_loading);
 
-        final String title;
         if (savedInstanceState != null) {
-            title = savedInstanceState.getString(ReaderConstants.ARG_TITLE);
+            mIsFeed = savedInstanceState.getBoolean(ReaderConstants.ARG_IS_FEED);
             mBlogId = savedInstanceState.getLong(ReaderConstants.ARG_BLOG_ID);
             mPostId = savedInstanceState.getLong(ReaderConstants.ARG_POST_ID);
-            mIsSinglePostView = savedInstanceState.getBoolean(ARG_IS_SINGLE_POST);
+            mIsSinglePostView = savedInstanceState.getBoolean(ReaderConstants.ARG_IS_SINGLE_POST);
+            mIsRelatedPostView = savedInstanceState.getBoolean(ReaderConstants.ARG_IS_RELATED_POST);
             if (savedInstanceState.containsKey(ReaderConstants.ARG_POST_LIST_TYPE)) {
                 mPostListType = (ReaderPostListType) savedInstanceState.getSerializable(ReaderConstants.ARG_POST_LIST_TYPE);
             }
@@ -98,10 +94,11 @@ public class ReaderPostPagerActivity extends ActionBarActivity
                 mCurrentTag = (ReaderTag) savedInstanceState.getSerializable(ReaderConstants.ARG_TAG);
             }
         } else {
-            title = getIntent().getStringExtra(ReaderConstants.ARG_TITLE);
+            mIsFeed = getIntent().getBooleanExtra(ReaderConstants.ARG_IS_FEED, false);
             mBlogId = getIntent().getLongExtra(ReaderConstants.ARG_BLOG_ID, 0);
             mPostId = getIntent().getLongExtra(ReaderConstants.ARG_POST_ID, 0);
-            mIsSinglePostView = getIntent().getBooleanExtra(ARG_IS_SINGLE_POST, false);
+            mIsSinglePostView = getIntent().getBooleanExtra(ReaderConstants.ARG_IS_SINGLE_POST, false);
+            mIsRelatedPostView = getIntent().getBooleanExtra(ReaderConstants.ARG_IS_RELATED_POST, false);
             if (getIntent().hasExtra(ReaderConstants.ARG_POST_LIST_TYPE)) {
                 mPostListType = (ReaderPostListType) getIntent().getSerializableExtra(ReaderConstants.ARG_POST_LIST_TYPE);
             }
@@ -114,29 +111,43 @@ public class ReaderPostPagerActivity extends ActionBarActivity
             mPostListType = ReaderPostListType.TAG_FOLLOWED;
         }
 
-        if (!TextUtils.isEmpty(title)) {
-            this.setTitle(title);
+        setTitle(mIsRelatedPostView ? R.string.reader_title_related_post_detail : R.string.reader_title_post_detail);
+
+        // for related posts, show an X in the toolbar which closes the activity - using the
+        // back button will navigate through related posts
+        if (mIsRelatedPostView) {
+            mToolbar.setNavigationIcon(R.drawable.ic_close_white_24dp);
+            mToolbar.setNavigationOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    finish();
+                }
+            });
         }
 
-        mViewPager.setOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
+        mViewPager.addOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
             @Override
             public void onPageSelected(int position) {
                 super.onPageSelected(position);
-                AnalyticsTracker.track(AnalyticsTracker.Stat.READER_OPENED_ARTICLE);
                 onShowHideToolbar(true);
-            }
+                trackPostAtPositionIfNeeded(position);
 
-            @Override
-            public void onPageScrollStateChanged(int state) {
-                super.onPageScrollStateChanged(state);
-                if (state == ViewPager.SCROLL_STATE_DRAGGING) {
-                    // pause the active web view when the user starts scrolling - important
-                    // because otherwise embedded content in the web view will continue to play
-                    ReaderPostDetailFragment fragment = getActiveDetailFragment();
-                    if (fragment != null) {
-                        fragment.pauseWebView();
+                // pause the previous web view - important because otherwise embedded content
+                // will continue to play
+                if (mLastSelectedPosition > -1 && mLastSelectedPosition != position) {
+                    ReaderPostDetailFragment lastFragment = getDetailFragmentAtPosition(mLastSelectedPosition);
+                    if (lastFragment != null) {
+                        lastFragment.pauseWebView();
                     }
                 }
+
+                // resume the newly active webView if it was previously paused
+                ReaderPostDetailFragment thisFragment = getDetailFragmentAtPosition(position);
+                if (thisFragment != null) {
+                    thisFragment.resumeWebViewIfPaused();
+                }
+
+                mLastSelectedPosition = position;
             }
         });
 
@@ -159,6 +170,16 @@ public class ReaderPostPagerActivity extends ActionBarActivity
         EventBus.getDefault().unregister(this);
     }
 
+    @Override
+    public boolean onOptionsItemSelected(final MenuItem item) {
+        if (item.getItemId() == android.R.id.home) {
+            onBackPressed();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     private boolean hasPagerAdapter() {
         return (mViewPager != null && mViewPager.getAdapter() != null);
     }
@@ -172,9 +193,9 @@ public class ReaderPostPagerActivity extends ActionBarActivity
     }
 
     @Override
-    protected void onSaveInstanceState(@Nonnull Bundle outState) {
-        outState.putString(ReaderConstants.ARG_TITLE, (String) this.getTitle());
-        outState.putBoolean(ARG_IS_SINGLE_POST, mIsSinglePostView);
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        outState.putBoolean(ReaderConstants.ARG_IS_SINGLE_POST, mIsSinglePostView);
+        outState.putBoolean(ReaderConstants.ARG_IS_RELATED_POST, mIsRelatedPostView);
 
         if (hasCurrentTag()) {
             outState.putSerializable(ReaderConstants.ARG_TAG, getCurrentTag());
@@ -183,15 +204,29 @@ public class ReaderPostPagerActivity extends ActionBarActivity
             outState.putSerializable(ReaderConstants.ARG_POST_LIST_TYPE, getPostListType());
         }
 
-        if (hasPagerAdapter()) {
-            ReaderBlogIdPostId id = getPagerAdapter().getCurrentBlogIdPostId();
-            if (id != null) {
-                outState.putLong(ReaderConstants.ARG_BLOG_ID, id.getBlogId());
-                outState.putLong(ReaderConstants.ARG_POST_ID, id.getPostId());
-            }
+        ReaderBlogIdPostId id = getAdapterCurrentBlogIdPostId();
+        if (id != null) {
+            outState.putLong(ReaderConstants.ARG_BLOG_ID, id.getBlogId());
+            outState.putLong(ReaderConstants.ARG_POST_ID, id.getPostId());
         }
 
         super.onSaveInstanceState(outState);
+    }
+
+    private ReaderBlogIdPostId getAdapterCurrentBlogIdPostId() {
+        PostPagerAdapter adapter = getPagerAdapter();
+        if (adapter == null) {
+            return null;
+        }
+        return adapter.getCurrentBlogIdPostId();
+    }
+
+    private ReaderBlogIdPostId getAdapterBlogIdPostIdAtPosition(int position) {
+        PostPagerAdapter adapter = getPagerAdapter();
+        if (adapter == null) {
+            return null;
+        }
+        return adapter.getBlogIdPostIdAtPosition(position);
     }
 
     @Override
@@ -200,10 +235,33 @@ public class ReaderPostPagerActivity extends ActionBarActivity
         if (fragment != null && fragment.isCustomViewShowing()) {
             // if full screen video is showing, hide the custom view rather than navigate back
             fragment.hideCustomView();
+        } else if (fragment != null && fragment.goBackInPostHistory()) {
+            // noop - fragment moved back to a previous post
         } else {
             super.onBackPressed();
-            overridePendingTransition(R.anim.reader_activity_scale_in, R.anim.reader_activity_slide_out);
         }
+    }
+
+    /*
+     * perform analytics tracking and bump the page view for the post at the passed position
+     * if it hasn't already been done
+     */
+    private void trackPostAtPositionIfNeeded(int position) {
+        if (!hasPagerAdapter() || mTrackedPositions.contains(position)) return;
+
+        ReaderBlogIdPostId idPair = getAdapterBlogIdPostIdAtPosition(position);
+        if (idPair == null) return;
+
+        AppLog.d(AppLog.T.READER, "reader pager > tracking post at position " + position);
+        mTrackedPositions.add(position);
+
+        // bump the page view
+        ReaderPostActions.bumpPageViewForPost(idPair.getBlogId(), idPair.getPostId());
+
+        // analytics tracking
+        AnalyticsUtils.trackWithReaderPostDetails(
+                AnalyticsTracker.Stat.READER_ARTICLE_OPENED,
+                ReaderPostTable.getBlogPost(idPair.getBlogId(), idPair.getPostId(), true));
     }
 
     /*
@@ -246,8 +304,10 @@ public class ReaderPostPagerActivity extends ActionBarActivity
                         mViewPager.setAdapter(adapter);
                         if (adapter.isValidPosition(newPosition)) {
                             mViewPager.setCurrentItem(newPosition);
+                            trackPostAtPositionIfNeeded(newPosition);
                         } else if (adapter.isValidPosition(currentPosition)) {
                             mViewPager.setCurrentItem(currentPosition);
+                            trackPostAtPositionIfNeeded(currentPosition);
                         }
                     }
                 });
@@ -263,31 +323,16 @@ public class ReaderPostPagerActivity extends ActionBarActivity
         return mCurrentTag != null;
     }
 
-    @Override
-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        boolean isResultOK = (resultCode == Activity.RESULT_OK);
-        if (isResultOK && requestCode == ReaderConstants.INTENT_READER_REBLOG) {
-            // update the reblog status in the detail view if the user returned
-            // from the reblog activity after successfully reblogging
-            ReaderPostDetailFragment fragment = getActiveDetailFragment();
-            if (fragment != null) {
-                fragment.doPostReblogged();
-            }
-        }
-    }
-
-    ReaderPostListType getPostListType() {
+    private ReaderPostListType getPostListType() {
         return mPostListType;
     }
 
     private Fragment getActivePagerFragment() {
-        if (hasPagerAdapter()) {
-            return getPagerAdapter().getActiveFragment();
-        } else {
+        PostPagerAdapter adapter = getPagerAdapter();
+        if (adapter == null) {
             return null;
         }
+        return adapter.getActiveFragment();
     }
 
     private ReaderPostDetailFragment getActiveDetailFragment() {
@@ -299,113 +344,20 @@ public class ReaderPostPagerActivity extends ActionBarActivity
         }
     }
 
-    /*
-     * user tapped the dropdown arrow to the right of the title on a detail fragment
-     */
-    @Override
-    public void onShowPostPopup(View view, final ReaderPost post) {
-        if (view == null || post == null) {
-            return;
+    private Fragment getPagerFragmentAtPosition(int position) {
+        PostPagerAdapter adapter = getPagerAdapter();
+        if (adapter == null) {
+            return null;
         }
-
-        PopupMenu popup = new PopupMenu(this, view);
-        MenuItem menuItem = popup.getMenu().add(getString(R.string.reader_menu_block_blog));
-        menuItem.setOnMenuItemClickListener(new MenuItem.OnMenuItemClickListener() {
-            @Override
-            public boolean onMenuItemClick(MenuItem item) {
-                blockBlogForPost(post.blogId, post.postId);
-                return true;
-            }
-        });
-        popup.show();
+        return adapter.getFragmentAtPosition(position);
     }
 
-    /*
-     * blocks the blog associated with the passed post and removes all posts in that blog
-     */
-    private void blockBlogForPost(final long blogId, final long postId) {
-        if (!NetworkUtils.checkConnection(this)) {
-            return;
-        }
-
-        Fragment fragment = getActivePagerFragment();
-        if (fragment == null) {
-            return;
-        }
-
-        // perform call to block this blog - returns list of posts deleted by blocking so
-        // they can be restored if the user undoes the block
-        ReaderActions.ActionListener actionListener = new ReaderActions.ActionListener() {
-            @Override
-            public void onActionResult(boolean succeeded) {
-                if (!succeeded && !isFinishing()) {
-                    hideUndoBar();
-                    ToastUtils.showToast(
-                            ReaderPostPagerActivity.this,
-                            R.string.reader_toast_err_block_blog,
-                            ToastUtils.Duration.LONG);
-                }
-            }
-        };
-        final BlockedBlogResult blockResult = ReaderBlogActions.blockBlogFromReader(blogId, actionListener);
-        AnalyticsTracker.track(AnalyticsTracker.Stat.READER_BLOCKED_BLOG);
-
-        // animate out the active fragment
-        AnimationEndListener animEndListener = new AnimationEndListener() {
-            @Override
-            public void onAnimationEnd() {
-                blockBlogForPostCompleted(blogId, postId, blockResult);
-            }
-        };
-        ReaderAnim.scaleOut(fragment.getView(), View.INVISIBLE, Duration.SHORT, animEndListener);
-    }
-
-    /*
-     * called after successfully blocking a blog and animating out the active fragment
-     */
-    private void blockBlogForPostCompleted(final long blogId,
-                                           final long postId,
-                                           final BlockedBlogResult blockResult) {
-        if (isFinishing()) {
-            return;
-        }
-
-        // show the undo bar - on undo we restore the deleted posts, and reselect the
-        // one the blog was blocked from
-        UndoBarController.UndoListener undoListener = new UndoBarController.UndoListener() {
-            @Override
-            public void onUndo(Parcelable parcelable) {
-                ReaderBlogActions.undoBlockBlogFromReader(blockResult);
-                loadPosts(blogId, postId);
-            }
-        };
-        new UndoBarController.UndoBar(ReaderPostPagerActivity.this)
-                .message(getString(R.string.reader_toast_blog_blocked))
-                .listener(undoListener)
-                .translucent(true)
-                .show();
-
-        // reload the adapter and move to the best post not in the blocked blog
-        int position = mViewPager.getCurrentItem();
-        ReaderBlogIdPostId newId = (hasPagerAdapter() ? getPagerAdapter().getBestIdNotInBlog(position, blogId) : null);
-        long newBlogId = (newId != null ? newId.getBlogId() : 0);
-        long newPostId = (newId != null ? newId.getPostId() : 0);
-        loadPosts(newBlogId, newPostId);
-    }
-
-    private void hideUndoBar() {
-        if (!isFinishing()) {
-            UndoBarController.clear(this);
-        }
-    }
-
-    /*
-     * called by detail fragment to show/hide the toolbar when user scrolls
-     */
-    @Override
-    public void onShowHideToolbar(boolean show) {
-        if (!isFinishing()) {
-            ReaderAnim.animateTopBar(mToolbar, show);
+    private ReaderPostDetailFragment getDetailFragmentAtPosition(int position) {
+        Fragment fragment = getPagerFragmentAtPosition(position);
+        if (fragment instanceof ReaderPostDetailFragment) {
+            return (ReaderPostDetailFragment) fragment;
+        } else {
+            return null;
         }
     }
 
@@ -445,9 +397,10 @@ public class ReaderPostPagerActivity extends ActionBarActivity
 
     @SuppressWarnings("unused")
     public void onEventMainThread(ReaderEvents.UpdatePostsEnded event) {
-        if (isFinishing() || !hasPagerAdapter()) {
-            return;
-        }
+        if (isFinishing()) return;
+
+        PostPagerAdapter adapter = getPagerAdapter();
+        if (adapter == null) return;
 
         mIsRequestingMorePosts = false;
         mProgress.setVisibility(View.GONE);
@@ -455,13 +408,23 @@ public class ReaderPostPagerActivity extends ActionBarActivity
         if (event.getResult() == ReaderActions.UpdateResult.HAS_NEW) {
             AppLog.d(AppLog.T.READER, "reader pager > older posts received");
             // remember which post to keep active
-            ReaderBlogIdPostId id = getPagerAdapter().getCurrentBlogIdPostId();
+            ReaderBlogIdPostId id = adapter.getCurrentBlogIdPostId();
             long blogId = (id != null ? id.getBlogId() : 0);
             long postId = (id != null ? id.getPostId() : 0);
             loadPosts(blogId, postId);
         } else {
             AppLog.d(AppLog.T.READER, "reader pager > all posts loaded");
-            getPagerAdapter().mAllPostsLoaded = true;
+            adapter.mAllPostsLoaded = true;
+        }
+    }
+
+    /*
+     * called by detail fragment to show/hide the toolbar when user scrolls
+     */
+    @Override
+    public void onShowHideToolbar(boolean show) {
+        if (!isFinishing()) {
+            AniUtils.animateTopBar(mToolbar, show);
         }
     }
 
@@ -525,11 +488,11 @@ public class ReaderPostPagerActivity extends ActionBarActivity
                 requestMorePosts();
             }
 
-            boolean disableBlockBlog = mIsSinglePostView;
             return ReaderPostDetailFragment.newInstance(
+                    mIsFeed,
                     mIdList.get(position).getBlogId(),
                     mIdList.get(position).getPostId(),
-                    disableBlockBlog,
+                    mIsRelatedPostView,
                     getPostListType());
         }
 
@@ -561,42 +524,16 @@ public class ReaderPostPagerActivity extends ActionBarActivity
         }
 
         private ReaderBlogIdPostId getCurrentBlogIdPostId() {
-            int position = mViewPager.getCurrentItem();
+            return getBlogIdPostIdAtPosition(mViewPager.getCurrentItem());
+
+        }
+
+        ReaderBlogIdPostId getBlogIdPostIdAtPosition(int position) {
             if (isValidPosition(position)) {
                 return mIdList.get(position);
             } else {
                 return null;
             }
-        }
-
-        /*
-         * returns the id pair of the previous/next post that isn't in the same blog
-         * as the one at the passed position
-         */
-        private ReaderBlogIdPostId getBestIdNotInBlog(int position, long blogId) {
-            if (!isValidPosition(position)) {
-                return null;
-            }
-
-            // search backwards
-            if (position > 0) {
-                for (int index = position - 1; index >= 0; index--) {
-                    if (mIdList.get(index).getBlogId() != blogId) {
-                        return mIdList.get(index);
-                    }
-                }
-            }
-
-            // search forwards
-            if (position < getCount() - 1) {
-                for (int index = position + 1; index < getCount(); index++) {
-                    if (mIdList.get(index).getBlogId() != blogId) {
-                        return mIdList.get(index);
-                    }
-                }
-            }
-
-            return null;
         }
     }
 }

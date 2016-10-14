@@ -56,7 +56,7 @@ public class AddQuickPressShortcutActivity extends ListActivity {
     }
 
     private void displayAccounts() {
-        accounts = WordPress.wpDB.getVisibleAccounts();
+        accounts = WordPress.wpDB.getVisibleBlogs();
 
         ListView listView = (ListView) findViewById(android.R.id.list);
 
@@ -96,7 +96,7 @@ public class AddQuickPressShortcutActivity extends ListActivity {
             }
 
             if (validBlogCtr < accounts.size()){
-                accounts = WordPress.wpDB.getVisibleAccounts();
+                accounts = WordPress.wpDB.getVisibleBlogs();
             }
 
             setListAdapter(new HomeListAdapter());
@@ -144,7 +144,8 @@ public class AddQuickPressShortcutActivity extends ListActivity {
                     Intent addIntent = new Intent();
                     addIntent.putExtra(Intent.EXTRA_SHORTCUT_INTENT, shortcutIntent);
                     addIntent.putExtra(Intent.EXTRA_SHORTCUT_NAME, quickPressShortcutName.getText().toString());
-                    addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, Intent.ShortcutIconResource.fromContext(AddQuickPressShortcutActivity.this, R.drawable.app_icon));
+                    addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, Intent.ShortcutIconResource.fromContext
+                            (AddQuickPressShortcutActivity.this, R.mipmap.app_icon));
 
                     WordPress.wpDB.addQuickPressShortcut(accountIDs[position], quickPressShortcutName.getText().toString());
 
@@ -174,7 +175,7 @@ public class AddQuickPressShortcutActivity extends ListActivity {
         switch (requestCode) {
             case ADD_ACCOUNT_REQUEST:
                 if (resultCode == RESULT_OK) {
-                    accounts = WordPress.wpDB.getVisibleAccounts();
+                    accounts = WordPress.wpDB.getVisibleBlogs();
                     if (accounts.size() > 0) {
                         displayAccounts();
                         break;

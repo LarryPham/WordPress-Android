@@ -2,8 +2,11 @@ package org.wordpress.android.models;
 
 import android.text.TextUtils;
 
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 import org.wordpress.android.ui.reader.ReaderConstants;
+import org.wordpress.android.ui.reader.models.ReaderBlogIdPostId;
 import org.wordpress.android.ui.reader.utils.ImageSizeMap;
 import org.wordpress.android.ui.reader.utils.ReaderImageScanner;
 import org.wordpress.android.ui.reader.utils.ReaderUtils;
@@ -21,12 +24,14 @@ public class ReaderPost {
     public long postId;
     public long blogId;
     public long feedId;
+    public long feedItemId;
     public long authorId;
 
     private String title;
     private String text;
     private String excerpt;
     private String authorName;
+    private String authorFirstName;
     private String blogName;
     private String blogUrl;
     private String postAvatar;
@@ -34,8 +39,10 @@ public class ReaderPost {
     private String primaryTag;    // most popular tag on this post based on usage in blog
     private String secondaryTag;  // second most popular tag on this post based on usage in blog
 
-    public long timestamp;        // used for sorting
-    private String published;
+    private String dateLiked;
+    private String dateTagged;
+    private String datePublished;
+    public double score;
 
     private String url;
     private String shortUrl;
@@ -47,17 +54,20 @@ public class ReaderPost {
 
     public boolean isLikedByCurrentUser;
     public boolean isFollowedByCurrentUser;
-    public boolean isRebloggedByCurrentUser;
     public boolean isCommentsOpen;
     public boolean isExternal;
     public boolean isPrivate;
     public boolean isVideoPress;
     public boolean isJetpack;
 
-    public boolean isLikesEnabled;
-    public boolean isSharingEnabled;    // currently unused
-
     private String attachmentsJson;
+    private String discoverJson;
+    private String format;
+
+    public long xpostPostId;
+    public long xpostBlogId;
+
+    private String railcarJson;
 
     public static ReaderPost fromJson(JSONObject json) {
         if (json == null) {
@@ -69,6 +79,7 @@ public class ReaderPost {
         post.postId = json.optLong("ID");
         post.blogId = json.optLong("site_ID");
         post.feedId = json.optLong("feed_ID");
+        post.feedItemId = json.optLong("feed_item_ID");
 
         if (json.has("pseudo_ID")) {
             post.pseudoId = JSONUtils.getString(json, "pseudo_ID");  // read/ endpoint
@@ -77,10 +88,11 @@ public class ReaderPost {
         }
 
         // remove HTML from the excerpt
-        post.excerpt = HtmlUtils.fastStripHtml(JSONUtils.getString(json, "excerpt"));
+        post.excerpt = HtmlUtils.fastStripHtml(JSONUtils.getString(json, "excerpt")).trim();
 
         post.text = JSONUtils.getString(json, "content");
         post.title = JSONUtils.getStringDecoded(json, "title");
+        post.format = JSONUtils.getString(json, "format");
         post.url = JSONUtils.getString(json, "URL");
         post.shortUrl = JSONUtils.getString(json, "short_URL");
         post.setBlogUrl(JSONUtils.getString(json, "site_URL"));
@@ -88,12 +100,9 @@ public class ReaderPost {
         post.numLikes = json.optInt("like_count");
         post.isLikedByCurrentUser = JSONUtils.getBool(json, "i_like");
         post.isFollowedByCurrentUser = JSONUtils.getBool(json, "is_following");
-        post.isRebloggedByCurrentUser = JSONUtils.getBool(json, "is_reblogged");
         post.isExternal = JSONUtils.getBool(json, "is_external");
         post.isPrivate = JSONUtils.getBool(json, "site_is_private");
-
-        post.isLikesEnabled = JSONUtils.getBool(json, "likes_enabled");
-        post.isSharingEnabled = JSONUtils.getBool(json, "sharing_enabled");
+        post.isJetpack = JSONUtils.getBool(json, "is_jetpack");
 
         JSONObject jsonDiscussion = json.optJSONObject("discussion");
         if (jsonDiscussion != null) {
@@ -107,31 +116,15 @@ public class ReaderPost {
         // parse the author section
         assignAuthorFromJson(post, json.optJSONObject("author"));
 
-        // only freshly-pressed posts have the "editorial" section
-        JSONObject jsonEditorial = json.optJSONObject("editorial");
-        if (jsonEditorial != null) {
-            post.blogId = jsonEditorial.optLong("blog_id");
-            post.blogName = JSONUtils.getStringDecoded(jsonEditorial, "blog_name");
-            post.featuredImage = ReaderImageScanner.getImageUrlFromFPFeaturedImageUrl(
-                    JSONUtils.getString(jsonEditorial, "image"));
-            post.setPrimaryTag(JSONUtils.getString(jsonEditorial, "highlight_topic_title")); //  highlight_topic?
-            // we want freshly-pressed posts to show & store the date they were chosen rather than the day they were published
-            post.published = JSONUtils.getString(jsonEditorial, "displayed_on");
-        } else {
-            post.featuredImage = JSONUtils.getString(json, "featured_image");
-            post.blogName = JSONUtils.getStringDecoded(json, "site_name");
-            post.published = JSONUtils.getString(json, "date");
-        }
+        post.featuredImage = JSONUtils.getString(json, "featured_image");
+        post.blogName = JSONUtils.getStringDecoded(json, "site_name");
 
-        // the date a post was liked is only returned by the read/liked/ endpoint - if this exists,
-        // set it as the timestamp so posts are sorted by the date they were liked rather than the
-        // date they were published (the timestamp is used to sort posts when querying)
-        String likeDate = JSONUtils.getString(json, "date_liked");
-        if (!TextUtils.isEmpty(likeDate)) {
-            post.timestamp = DateTimeUtils.iso8601ToTimestamp(likeDate);
-        } else {
-            post.timestamp = DateTimeUtils.iso8601ToTimestamp(post.published);
-        }
+        post.datePublished = JSONUtils.getString(json, "date");
+        post.dateLiked = JSONUtils.getString(json, "date_liked");
+        post.dateTagged = JSONUtils.getString(json, "tagged_on");
+
+        // "score" only exists for search results
+        post.score = json.optDouble("score");
 
         // if the post is untitled, make up a title from the excerpt
         if (!post.hasTitle() && post.hasExcerpt()) {
@@ -162,6 +155,15 @@ public class ReaderPost {
             // TODO: as of 29-Sept-2014, this is broken - endpoint returns false when it should be true
             post.isJetpack = JSONUtils.getBool(jsonSite, "jetpack");
         }
+
+        // "discover" posts
+        JSONObject jsonDiscover = json.optJSONObject("discover_metadata");
+        if (jsonDiscover != null) {
+            post.setDiscoverJson(jsonDiscover.toString());
+        }
+
+        // xpost info
+        assignXpostIdsFromJson(post, json.optJSONArray("metadata"));
 
         // if there's no featured image, check if featured media has been set - this is sometimes
         // a YouTube or Vimeo video, in which case store it as the featured video so we can treat
@@ -194,18 +196,53 @@ public class ReaderPost {
                     .getLargestImage(ReaderConstants.MIN_FEATURED_IMAGE_WIDTH);
         }
 
+        // "railcar" data - currently used in search streams, used by TrainTracks
+        JSONObject jsonRailcar = json.optJSONObject("railcar");
+        if (jsonRailcar != null) {
+            post.setRailcarJson(jsonRailcar.toString());
+        }
+
         return post;
+    }
+
+    /*
+     * assigns cross post blog & post IDs from post's metadata section
+     *  "metadata": [
+     *       {
+     *           "id": "21192",
+     *           "key": "xpost_origin",
+     *           "value": "11326809:18427"
+     *       }
+     *     ],
+     */
+    private static void assignXpostIdsFromJson(ReaderPost post, JSONArray jsonMetadata) {
+        if (jsonMetadata ==  null) return;
+
+        for (int i = 0; i < jsonMetadata.length(); i++) {
+            JSONObject jsonMetaItem = jsonMetadata.optJSONObject(i);
+            String metaKey = jsonMetaItem.optString("key");
+            if (!TextUtils.isEmpty(metaKey) && metaKey.equals("xpost_origin")) {
+                String value = jsonMetaItem.optString("value");
+                if (!TextUtils.isEmpty(value) && value.contains(":")) {
+                    String[] valuePair = value.split(":");
+                    if (valuePair.length == 2) {
+                        post.xpostBlogId = StringUtils.stringToLong(valuePair[0]);
+                        post.xpostPostId = StringUtils.stringToLong(valuePair[1]);
+                        return;
+                    }
+                }
+            }
+        }
     }
 
      /*
       * assigns author-related info to the passed post from the passed JSON "author" object
       */
     private static void assignAuthorFromJson(ReaderPost post, JSONObject jsonAuthor) {
-        if (jsonAuthor == null) {
-            return;
-        }
+        if (jsonAuthor == null) return;
 
-        post.authorName = JSONUtils.getString(jsonAuthor, "name");
+        post.authorName = JSONUtils.getStringDecoded(jsonAuthor, "name");
+        post.authorFirstName = JSONUtils.getStringDecoded(jsonAuthor, "first_name");
         post.postAvatar = JSONUtils.getString(jsonAuthor, "avatar_URL");
         post.authorId = jsonAuthor.optLong("ID");
 
@@ -242,13 +279,12 @@ public class ReaderPost {
             int postCount = jsonThisTag.optInt("post_count");
             if (postCount > popularCount) {
                 nextMostPopularTag = mostPopularTag;
-                mostPopularTag = JSONUtils.getString(jsonThisTag, "name");
+                mostPopularTag = JSONUtils.getStringDecoded(jsonThisTag, "slug");
                 popularCount = postCount;
             }
         }
 
-        // don't set primary tag if one is already set (may have been set from the editorial
-        // section if this is a Freshly Pressed post)
+        // don't set primary tag if one is already set
         if (!post.hasPrimaryTag()) {
             post.setPrimaryTag(mostPopularTag);
         }
@@ -291,8 +327,15 @@ public class ReaderPost {
     public String getAuthorName() {
         return StringUtils.notNullStr(authorName);
     }
-    public void setAuthorName(String authorName) {
-        this.authorName = StringUtils.notNullStr(authorName);
+    public void setAuthorName(String name) {
+        this.authorName = StringUtils.notNullStr(name);
+    }
+
+    public String getAuthorFirstName() {
+        return StringUtils.notNullStr(authorFirstName);
+    }
+    public void setAuthorFirstName(String name) {
+        this.authorFirstName = StringUtils.notNullStr(name);
     }
 
     public String getTitle() {
@@ -315,6 +358,19 @@ public class ReaderPost {
     public void setExcerpt(String excerpt) {
         this.excerpt = StringUtils.notNullStr(excerpt);
     }
+
+    // https://codex.wordpress.org/Post_Formats
+    public String getFormat() {
+        return StringUtils.notNullStr(format);
+    }
+    public void setFormat(String format) {
+        this.format = StringUtils.notNullStr(format);
+    }
+
+    public boolean isGallery() {
+        return format != null && format.equals("gallery");
+    }
+
 
     public String getUrl() {
         return StringUtils.notNullStr(url);
@@ -375,20 +431,33 @@ public class ReaderPost {
         this.pseudoId = StringUtils.notNullStr(pseudoId);
     }
 
-    public String getPublished() {
-        return StringUtils.notNullStr(published);
+    public String getDatePublished() {
+        return StringUtils.notNullStr(datePublished);
     }
-    public void setPublished(String published) {
-        this.published = StringUtils.notNullStr(published);
+    public void setDatePublished(String dateStr) {
+        this.datePublished = StringUtils.notNullStr(dateStr);
+    }
+
+    public String getDateLiked() {
+        return StringUtils.notNullStr(dateLiked);
+    }
+    public void setDateLiked(String dateStr) {
+        this.dateLiked = StringUtils.notNullStr(dateStr);
+    }
+
+    public String getDateTagged() {
+        return StringUtils.notNullStr(dateTagged);
+    }
+    public void setDateTagged(String dateStr) {
+        this.dateTagged = StringUtils.notNullStr(dateStr);
     }
 
     public String getPrimaryTag() {
         return StringUtils.notNullStr(primaryTag);
     }
     public void setPrimaryTag(String tagName) {
-        // this is a bit of a hack to avoid setting the primary tag to one of the default
-        // tag names ("Freshly Pressed", etc.)
-        if (!ReaderTag.isDefaultTagName(tagName)) {
+        // this is a bit of a hack to avoid setting the primary tag to one of the defaults
+        if (!ReaderTag.isDefaultTagTitle(tagName)) {
             this.primaryTag = StringUtils.notNullStr(tagName);
         }
     }
@@ -400,7 +469,7 @@ public class ReaderPost {
         return StringUtils.notNullStr(secondaryTag);
     }
     public void setSecondaryTag(String tagName) {
-        if (!ReaderTag.isDefaultTagName(tagName)) {
+        if (!ReaderTag.isDefaultTagTitle(tagName)) {
             this.secondaryTag = StringUtils.notNullStr(tagName);
         }
     }
@@ -415,8 +484,33 @@ public class ReaderPost {
     public void setAttachmentsJson(String json) {
         attachmentsJson = StringUtils.notNullStr(json);
     }
-    boolean hasAttachments() {
+    public boolean hasAttachments() {
         return !TextUtils.isEmpty(attachmentsJson);
+    }
+
+    /*
+     * "discover" posts also store the actual JSON
+     */
+    public String getDiscoverJson() {
+        return StringUtils.notNullStr(discoverJson);
+    }
+    public void setDiscoverJson(String json) {
+        discoverJson = StringUtils.notNullStr(json);
+    }
+    public boolean isDiscoverPost() {
+        return !TextUtils.isEmpty(discoverJson);
+    }
+
+    private transient ReaderPostDiscoverData discoverData;
+    public ReaderPostDiscoverData getDiscoverData() {
+        if (discoverData == null && !TextUtils.isEmpty(discoverJson)) {
+            try {
+                discoverData = new ReaderPostDiscoverData(new JSONObject(discoverJson));
+            } catch (JSONException e) {
+                return null;
+            }
+        }
+        return discoverData;
     }
 
     public boolean hasText() {
@@ -451,6 +545,10 @@ public class ReaderPost {
         return !TextUtils.isEmpty(authorName);
     }
 
+    public boolean hasAuthorFirstName() {
+        return !TextUtils.isEmpty(authorFirstName);
+    }
+
     public boolean hasTitle() {
         return !TextUtils.isEmpty(title);
     }
@@ -460,31 +558,61 @@ public class ReaderPost {
     }
 
     /*
-     * only public wp posts can be reblogged
-     */
-    public boolean canReblog() {
-        return !isExternal && !isPrivate;
-    }
-
-    /*
      * returns true if this post is from a WordPress blog
      */
     public boolean isWP() {
         return !isExternal;
     }
 
+    /*
+     * returns true if this is a cross-post
+     */
+    public boolean isXpost() {
+        return xpostBlogId != 0 && xpostPostId != 0;
+    }
 
+    /*
+     * returns true if the passed post appears to be the same as this one - used when posts are
+     * retrieved to determine which ones are new/changed/unchanged
+     */
     public boolean isSamePost(ReaderPost post) {
         return post != null
                 && post.blogId == this.blogId
                 && post.postId == this.postId
+                && post.feedId == this.feedId
+                && post.feedItemId == this.feedItemId
                 && post.numLikes == this.numLikes
                 && post.numReplies == this.numReplies
                 && post.isFollowedByCurrentUser == this.isFollowedByCurrentUser
                 && post.isLikedByCurrentUser == this.isLikedByCurrentUser
                 && post.isCommentsOpen == this.isCommentsOpen
-                && post.isLikesEnabled == this.isLikesEnabled
-                && post.isRebloggedByCurrentUser == this.isRebloggedByCurrentUser;
+                && post.getTitle().equals(this.getTitle())
+                && post.getExcerpt().equals(this.getExcerpt())
+                && post.getText().equals(this.getText());
+    }
+
+    public boolean hasIds(ReaderBlogIdPostId ids) {
+        return ids != null
+                && ids.getBlogId() == this.blogId
+                && ids.getPostId() == this.postId;
+    }
+
+    /*
+     * liking is enabled for all wp.com and jp posts with the exception of discover posts
+     */
+    public boolean canLikePost() {
+        return (isWP() || isJetpack) && (!isDiscoverPost());
+    }
+
+
+    public String getRailcarJson() {
+        return StringUtils.notNullStr(railcarJson);
+    }
+    public void setRailcarJson(String jsonRailcar) {
+        this.railcarJson = StringUtils.notNullStr(jsonRailcar);
+    }
+    public boolean hasRailcar() {
+        return !TextUtils.isEmpty(railcarJson);
     }
 
     /****
@@ -512,25 +640,39 @@ public class ReaderPost {
      * returns the avatar url as a photon url set to the passed size
      */
     private transient String avatarForDisplay;
-    public String getPostAvatarForDisplay(int avatarSize) {
+    public String getPostAvatarForDisplay(int size) {
         if (avatarForDisplay == null) {
             if (!hasPostAvatar()) {
                 return "";
             }
-            avatarForDisplay = GravatarUtils.fixGravatarUrl(postAvatar, avatarSize);
+            avatarForDisplay = GravatarUtils.fixGravatarUrl(postAvatar, size);
         }
         return avatarForDisplay;
     }
 
     /*
-     * converts iso8601 published date to an actual java date
+     * returns the blog's blavatar url as a photon url set to the passed size
      */
-    private transient java.util.Date dtPublished;
-    public java.util.Date getDatePublished() {
-        if (dtPublished == null) {
-            dtPublished = DateTimeUtils.iso8601ToJavaDate(published);
+    private transient String blavatarForDisplay;
+    public String getPostBlavatarForDisplay(int size) {
+        if (blavatarForDisplay == null) {
+            if (!hasBlogUrl()) {
+                return "";
+            }
+            blavatarForDisplay = GravatarUtils.blavatarFromUrl(getBlogUrl(), size);
         }
-        return dtPublished;
+        return blavatarForDisplay;
+    }
+
+    /*
+     * converts iso8601 pubDate to a java date for display - this is the date that appears on posts
+     */
+    private transient java.util.Date dtDisplay;
+    public java.util.Date getDisplayDate() {
+        if (dtDisplay == null) {
+            dtDisplay = DateTimeUtils.dateFromIso8601(this.datePublished);
+        }
+        return dtDisplay;
     }
 
     /*
